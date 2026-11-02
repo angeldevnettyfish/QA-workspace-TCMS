@@ -15,8 +15,11 @@ import jwt
 from .models import Base, now, User, Project, Membership, TestFolder, TestCase, CaseVersion, TestPlan, PlanCase, Cycle, CycleCase, Execution, Defect, DefectExecution, AutomationMap, ImportLog, Attachment, AuditEvent, ApiToken, Notification, RequirementRecord, RequirementCase, CustomField
 from .dashboard import create_dashboard_router
 from .test_cases import create_test_cases_router
+from .bitbucket import create_bitbucket_router
 
-DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./dev.db')
+from .config import database_url
+
+DATABASE_URL=database_url()
 SECRET=os.getenv('JWT_SECRET','development-only-change-me')
 engine=create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={'check_same_thread':False} if DATABASE_URL.startswith('sqlite') else {})
 SessionLocal=sessionmaker(bind=engine)
@@ -471,13 +474,14 @@ async def import_junit(cycle_id:int,file:UploadFile=File(...),s:Session=Depends(
     if len(raw)>5_000_000: raise HTTPException(413,'XML file too large')
     return import_junit_content(cycle_id,file.filename or '',raw,s,u,pid)
 
-def import_junit_content(cycle_id,filename,raw,s,u,pid):
-    checksum=_hashlib.sha256(raw).hexdigest()
+def import_junit_content(cycle_id,filename,raw,s,u,pid,commit=True,run_id=None):
+    checksum=_hashlib.sha256(raw if run_id is None else str(run_id).encode()+b'\0'+raw).hexdigest()
     prior=s.scalar(select(ImportLog).where(ImportLog.cycle_id==cycle_id,ImportLog.checksum==checksum))
     if prior: raise HTTPException(409,f'Duplicate import (import #{prior.id})')
     if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper(): raise HTTPException(400,'DTD/entities not allowed')
     try:root=ET.fromstring(raw)
     except ET.ParseError as exc: raise HTTPException(400,'Invalid XML') from exc
+    if root.tag.split('}')[-1] not in ('testsuite','testsuites'): raise HTTPException(400,'Expected a JUnit testsuite or testsuites document')
     cases=root.findall('.//testcase')
     if not cases:
         cases=root.findall('.//{*}testcase')
@@ -497,7 +501,8 @@ def import_junit_content(cycle_id,filename,raw,s,u,pid):
         status='Failed' if failure is not None else 'Skipped' if skipped is not None else 'Passed'
         notes=((failure.text or failure.get('message',''))[:4000] if failure is not None else '')
         execution=Execution(cycle_case_id=cc.id,user_id=u.id,status=status,source='Automation',notes=notes,duration=tc.get('time',''));s.add(execution);imported+=1
-    log=ImportLog(cycle_id=cycle_id,filename=os.path.basename(filename)[:255],checksum=checksum,imported=imported,unmatched=unmatched,errors=errors);s.add(log);s.flush();audit(s,u.id,'import','junit',log.id,pid,after={'filename':log.filename,'checksum':checksum,'imported':imported,'unmatched':unmatched});s.commit()
+    log=ImportLog(cycle_id=cycle_id,filename=os.path.basename(filename)[:255],checksum=checksum,imported=imported,unmatched=unmatched,errors=errors);s.add(log);s.flush();audit(s,u.id,'import','junit',log.id,pid,after={'filename':log.filename,'checksum':checksum,'imported':imported,'unmatched':unmatched})
+    if commit: s.commit()
     return {'import_id':log.id,'imported':imported,'unmatched':unmatched,'errors':errors,'duplicate':False}
 @app.get('/api/automation/imports')
 def automation_imports(cycle_id:int,s:Session=Depends(db),u:User=Depends(user)):
@@ -630,3 +635,4 @@ def health(s:Session=Depends(db)):
     return {'status':'ok','database':'ok','api_version':'v1'}
 
 app.include_router(create_test_cases_router(db, user, accessible, require_project_role, obj, data, audit, validate_custom_values))
+app.include_router(create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content))

@@ -1,9 +1,42 @@
 """Shared database models used by API modules."""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index, LargeBinary
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
+
+class AutomationHtmlReport(Base):
+    __tablename__ = 'automation_html_reports'
+    run_id = Column(Integer, ForeignKey('automation_runs.id'), primary_key=True)
+    content = Column(LargeBinary, nullable=False)
+
+class BitbucketConfig(Base):
+    __tablename__ = 'bitbucket_configs'
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    workspace = Column(String(100), nullable=False)
+    repository = Column(String(100), nullable=False)
+    branch = Column(String(200), nullable=False)
+    pipeline = Column(String(200), nullable=False)
+
+class AutomationRun(Base):
+    __tablename__ = 'automation_runs'
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False)
+    cycle_id = Column(Integer, ForeignKey('cycles.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    workspace = Column(String(100), nullable=False)
+    repository = Column(String(100), nullable=False)
+    branch = Column(String(200), nullable=False)
+    pipeline = Column(String(200), nullable=False)
+    pipeline_uuid = Column(String(100))
+    build_number = Column(Integer)
+    state = Column(String(40), nullable=False, default='TRIGGERING')
+    result = Column(String(40))
+    error = Column(Text)
+    callback_hash = Column(String(64), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    import_id = Column(Integer, ForeignKey('import_logs.id'))
+    created_at = Column(DateTime(timezone=True), default=lambda: now())
 
 def now(): return datetime.now(timezone.utc)
 class User(Base):

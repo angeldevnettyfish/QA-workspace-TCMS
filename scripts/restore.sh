@@ -16,8 +16,8 @@ attachment_backup="$2"
 test -s "$database_backup"
 test -s "$attachment_backup"
 docker compose stop backend
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U qa -d qamanager -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U qa -d qamanager < "$database_backup"
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"'
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$database_backup"
 docker compose run --rm -T --no-deps backend sh -c 'mkdir -p /app/uploads && find /app/uploads -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' 
 docker compose run --rm -T --no-deps backend sh -c 'tar -C /app/uploads -xzf -' < "$attachment_backup"
 docker compose start backend
