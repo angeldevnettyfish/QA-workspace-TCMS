@@ -157,7 +157,7 @@ def test_html_can_be_attached_to_xml_only_run_without_duplicate_execution(client
     assert len(client.get(f"/api/executions?cycle_id={cycle['id']}").json()) == 1
 
 
-@pytest.mark.parametrize('filename,content,status', [('report.txt', b'hello', 415), ('report.html', b' ', 400), ('report.html', b'x'*10_000_001, 413)])
+@pytest.mark.parametrize('filename,content,status', [('report.txt', b'hello', 415), ('report.html', b' ', 400), ('report.html', b'x'*25_000_001, 413)], ids=['wrong-extension', 'empty-html', 'oversized-html'])
 def test_rejected_html_does_not_partially_import_results(client, configured, filename, content, status):
     _, cycle, calls = configured
     run, variables = trigger(client, cycle, calls)
@@ -167,3 +167,15 @@ def test_rejected_html_does_not_partially_import_results(client, configured, fil
     assert response.status_code == status
     assert client.get(f"/api/executions?cycle_id={cycle['id']}").json() == []
     assert client.get(f"/api/automation/runs/{run['id']}/html").status_code == 404
+
+
+def test_html_larger_than_old_limit_is_stored_and_viewable(client, configured):
+    _, cycle, calls = configured
+    run, variables = trigger(client, cycle, calls)
+    html = b'<html><body>' + b'x' * 10_000_001 + b'</body></html>'
+    response = client.post(f"/api/automation/runs/{run['id']}/report", headers={'Authorization': 'Bearer '+variables['QA_CALLBACK_TOKEN']}, files={
+        'file': ('results.xml', XML, 'application/xml'), 'html_report': ('report.html', html, 'text/html'),
+    })
+    assert response.status_code == 200
+    assert client.get(response.json()['html_report_url']).content == html
+    assert len(client.get(f"/api/executions?cycle_id={cycle['id']}").json()) == 1

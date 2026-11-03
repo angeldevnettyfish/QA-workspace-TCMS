@@ -192,9 +192,9 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
         if html_report is not None:
             if not (html_report.filename or '').lower().endswith(('.html', '.htm')):
                 raise HTTPException(415, 'Upload a .html report')
-            html_content = await html_report.read(10_000_001)
-            if len(html_content) > 10_000_000:
-                raise HTTPException(413, 'HTML report exceeds the 10 MB limit')
+            html_content = await html_report.read(25_000_001)
+            if len(html_content) > 25_000_000:
+                raise HTTPException(413, 'HTML report exceeds the 25 MB limit')
             if not html_content.strip():
                 raise HTTPException(400, 'HTML report is empty')
         if run.import_id:
