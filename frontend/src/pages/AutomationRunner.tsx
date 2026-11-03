@@ -1,5 +1,6 @@
-import {useEffect, useState, useCallback} from 'react';
+import {useEffect, useState, useCallback, useRef} from 'react';
 import {Panel, Table, Field, SelectField} from '../components/ui';
+import HtmlReportViewer from '../components/HtmlReportViewer';
 
 type Row = Record<string, any>;
 type Api = (path:string, options?:RequestInit)=>Promise<any>;
@@ -14,6 +15,10 @@ export default function AutomationRunner({projectId, cycleId, cycles, canLead, a
   const [error,setError]=useState('');
   const [message,setMessage]=useState('');
   const [viewReport,setViewReport]=useState<Row|null>(null);
+  const reportPanel=useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    if(viewReport)reportPanel.current?.scrollIntoView({behavior:'instant',block:'start'});
+  },[viewReport]);
   const load=useCallback(async()=>setRuns(await api(`/automation/runs?project_id=${projectId}`)),[api,projectId]);
   useEffect(()=>{let cancelled=false;
     void api(`/automation/bitbucket?project_id=${projectId}`).then(result=>{
@@ -55,14 +60,14 @@ export default function AutomationRunner({projectId, cycleId, cycles, canLead, a
       <p>Report uploads appear automatically every 10 seconds. Refresh a run to check its Bitbucket pipeline status.</p>
       <Table headers={['Run','Cycle','Branch / pipeline','Pipeline status','Report','Actions']}>
         {runs.map(run=><tr key={run.id}><td>#{run.id}<br/><small>{run.created_at}</small></td><td>{cycles.find(c=>c.id===run.cycle_id)?.name??run.cycle_id}</td><td>{run.branch}<br/>{run.pipeline}</td><td>{run.state}{run.result?` / ${run.result}`:''}{run.error&&<p>{run.error}</p>}</td>
-          <td>{run.html_report_url&&<button onClick={()=>setViewReport(run)}>View HTML report</button>}{run.report?<>{run.report.imported} imported<br/>{run.report.unmatched.length} unmatched{run.report.unmatched.length>0&&<details><summary>Unmatched tests</summary><pre>{JSON.stringify(run.report.unmatched,null,2)}</pre></details>}{run.report.errors.length>0&&<pre>{JSON.stringify(run.report.errors,null,2)}</pre>}</>:run.state==='COMPLETED'?'No report received':'Waiting for report'}</td>
+          <td>{run.html_report_url&&<button onClick={()=>setViewReport({...run})}>View HTML report</button>}{run.report?<>{run.report.imported} imported<br/>{run.report.unmatched.length} unmatched{run.report.unmatched.length>0&&<details><summary>Unmatched tests</summary><pre>{JSON.stringify(run.report.unmatched,null,2)}</pre></details>}{run.report.errors.length>0&&<pre>{JSON.stringify(run.report.errors,null,2)}</pre>}</>:run.state==='COMPLETED'?'No report received':'Waiting for report'}</td>
           <td>{run.url&&<a href={run.url} target="_blank" rel="noreferrer">Open Bitbucket</a>}{canLead&&<button disabled={busy} onClick={()=>void task(async()=>{await api(`/automation/runs/${run.id}/refresh`,{method:'POST'});await load();onReport();})}>Refresh status</button>}</td>
         </tr>)}
       </Table>{runs.length===0&&<p>No automation runs yet.</p>}
     </Panel>
-    {viewReport&&<Panel title={`HTML report — Run #${viewReport.id}`}>
+    {viewReport&&<div ref={reportPanel} style={{scrollMarginTop:120}}><Panel title={`HTML report — Run #${viewReport.id}`}>
       <button className="secondary" onClick={()=>setViewReport(null)}>Close report</button>
-      <iframe title={`Automation HTML report for run ${viewReport.id}`} src={viewReport.html_report_url} sandbox="allow-scripts" style={{width:'100%',height:'75vh',border:'1px solid #ccc',background:'#fff'}}/>
-    </Panel>}
+      <HtmlReportViewer key={viewReport.id} runId={viewReport.id} url={viewReport.html_report_url}/>
+    </Panel></div>}
   </>;
 }
