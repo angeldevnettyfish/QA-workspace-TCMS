@@ -179,3 +179,30 @@ def test_html_larger_than_old_limit_is_stored_and_viewable(client, configured):
     assert response.status_code == 200
     assert client.get(response.json()['html_report_url']).content == html
     assert len(client.get(f"/api/executions?cycle_id={cycle['id']}").json()) == 1
+
+
+def test_history_preserves_all_report_tests_and_per_run_results(client, configured):
+    project, cycle, calls = configured
+    run, variables = trigger(client, cycle, calls)
+    xml = b'''<testsuites xmlns="urn:junit"><testsuite>
+      <testcase classname="smoke" name="login" time="0.125"><failure message="Expected dashboard"/></testcase>
+      <testcase classname="other" name="unmapped" time="1.2"/>
+      <testcase classname="other" name="skipped"><skipped/></testcase>
+      <testcase classname="other" name="broken"><error>Connection refused</error></testcase>
+    </testsuite></testsuites>'''
+    response = upload(client, run, variables['QA_CALLBACK_TOKEN'], xml)
+    assert response.status_code == 200, response.text
+    tests = response.json()['test_results']
+    assert [test['status'] for test in tests] == ['Failed', 'Passed', 'Skipped', 'Failed']
+    assert tests[0]['case_id'] is not None
+    assert tests[0]['message'] == 'Expected dashboard'
+    assert tests[0]['duration'] == '0.125'
+    assert tests[1]['case_id'] is None
+    assert tests[3]['message'] == 'Connection refused'
+    assert upload(client, run, variables['QA_CALLBACK_TOKEN'], xml).json()['test_results'] == tests
+    second, variables2 = trigger(client, cycle, calls)
+    assert second['test_results'] is None
+    assert upload(client, second, variables2['QA_CALLBACK_TOKEN'], b'<testsuite><testcase classname="smoke" name="login"/></testsuite>').status_code == 200
+    history = client.get(f"/api/automation/runs?project_id={project['id']}").json()
+    assert history[0]['test_results'][0]['status'] == 'Passed'
+    assert history[1]['test_results'] == tests

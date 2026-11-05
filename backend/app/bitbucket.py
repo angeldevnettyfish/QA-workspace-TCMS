@@ -1,11 +1,16 @@
 """Bitbucket Cloud dispatch and per-run JUnit callbacks."""
 import base64
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import Literal
 import hashlib
 import hmac
 import json
 import os
 import secrets
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
@@ -17,7 +22,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import AutomationRun, AutomationHtmlReport, BitbucketConfig, ImportLog, Project, User, now
+from .scheduling import next_occurrence, process_due_schedules, utc
+from .models import AutomationSchedule, AutomationRun, AutomationHtmlReport, AutomationTestResults, BitbucketConfig, ImportLog, Project, User, now
+
+SCHEDULER_POLL_SECONDS = 15
 
 
 class ConfigIn(BaseModel):
@@ -29,6 +37,19 @@ class ConfigIn(BaseModel):
 
 class RunIn(BaseModel):
     cycle_id: int
+
+
+class ScheduleIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    cycle_id: int
+    frequency: Literal['once', 'daily', 'weekly']
+    timezone: Literal['Asia/Kolkata', 'UTC'] = 'Asia/Kolkata'
+    start_local: datetime
+    enabled: bool = True
+
+
+class ScheduleEnabled(BaseModel):
+    enabled: bool
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -64,12 +85,33 @@ def callback_base():
     return value
 
 
-def create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content):
-    router = APIRouter(prefix='/api/automation')
+def create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content, session_factory):
+    @asynccontextmanager
+    async def scheduler_lifespan(app):
+        stop = asyncio.Event()
+        async def worker():
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=SCHEDULER_POLL_SECONDS)
+                except asyncio.TimeoutError:
+                    try:
+                        await asyncio.to_thread(run_due_schedules)
+                    except Exception:
+                        logging.getLogger(__name__).exception('Automation scheduler tick failed')
+        task = asyncio.create_task(worker()) if os.getenv('AUTOMATION_SCHEDULER_ENABLED', 'true').lower() == 'true' else None
+        try:
+            yield
+        finally:
+            stop.set()
+            if task:
+                await task
+
+    router = APIRouter(prefix='/api/automation', lifespan=scheduler_lifespan)
 
     def public_run(run, session):
         log = session.get(ImportLog, run.import_id) if run.import_id else None
-        return {**{key: getattr(run, key) for key in (
+        results = session.get(AutomationTestResults, run.id)
+        return {'test_results': results.tests if results else None, **{key: getattr(run, key) for key in (
             'id', 'project_id', 'cycle_id', 'branch', 'pipeline', 'build_number',
             'state', 'result', 'error', 'import_id', 'created_at')},
             'url': f'https://bitbucket.org/{quote(run.workspace, safe="")}/{quote(run.repository, safe="")}/pipelines/results/{run.build_number}' if run.build_number else None,
@@ -106,11 +148,12 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
         s.commit()
         return {'ok': True}
 
-    @router.post('/runs')
-    def trigger(body: RunIn, s: Session = Depends(db), u: User = Depends(user)):
-        pid = project_for_cycle(s, body.cycle_id)
+    def dispatch(cycle_id, s, u):
+        pid = project_for_cycle(s, cycle_id)
         accessible(s, u, pid)
         require_project_role(s, u, pid, ('admin', 'lead'))
+        if obj(s, Project, pid).archived:
+            raise HTTPException(400, 'Project is archived')
         cfg = s.get(BitbucketConfig, pid)
         if not cfg:
             raise HTTPException(400, 'Save the project Bitbucket settings first')
@@ -118,7 +161,7 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
         if not os.getenv('BITBUCKET_API_TOKEN', '').strip():
             raise HTTPException(503, 'Set BITBUCKET_API_TOKEN on the backend first')
         secret = secrets.token_urlsafe(32)
-        run = AutomationRun(project_id=pid, cycle_id=body.cycle_id, user_id=u.id,
+        run = AutomationRun(project_id=pid, cycle_id=cycle_id, user_id=u.id,
                             workspace=cfg.workspace, repository=cfg.repository, branch=cfg.branch, pipeline=cfg.pipeline,
                             callback_hash=hashlib.sha256(secret.encode()).hexdigest(), expires_at=now()+timedelta(hours=24))
         s.add(run)
@@ -140,7 +183,94 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
             run.state = 'DISPATCH_UNCONFIRMED'
             run.error = str(exc.detail)
         s.commit()
-        return public_run(run, s)
+        return run
+
+    def run_due_schedules(at=None):
+        process_due_schedules(session_factory, dispatch, at)
+
+    # Expose the same dispatcher for deterministic tests without running timers.
+    router.run_due_schedules = run_due_schedules
+
+    @router.post('/runs')
+    def trigger(body: RunIn, s: Session = Depends(db), u: User = Depends(user)):
+        return public_run(dispatch(body.cycle_id, s, u), s)
+
+    def public_schedule(value):
+        result = {key: getattr(value, key) for key in (
+            'id', 'project_id', 'cycle_id', 'name', 'frequency', 'timezone',
+            'enabled', 'last_run_id', 'last_error')}
+        for key in ('start_at', 'next_run_at', 'created_at'):
+            result[key] = utc(getattr(value, key)).isoformat()
+        return result
+
+    def schedule_values(body, s, u, project_id):
+        accessible(s, u, project_id)
+        require_project_role(s, u, project_id, ('admin', 'lead'))
+        if project_for_cycle(s, body.cycle_id) != project_id:
+            raise HTTPException(400, 'Cycle belongs to another project')
+        if obj(s, Project, project_id).archived:
+            raise HTTPException(400, 'Project is archived')
+        if not s.get(BitbucketConfig, project_id):
+            raise HTTPException(400, 'Save the project Bitbucket settings first')
+        if not body.name.strip():
+            raise HTTPException(422, 'Schedule name must not be blank')
+        if body.start_local.tzinfo is not None:
+            raise HTTPException(422, 'Use a local date/time without an offset and select its timezone')
+        start = body.start_local.replace(tzinfo=ZoneInfo(body.timezone)).astimezone(timezone.utc)
+        following = next_occurrence(start, body.frequency, body.timezone, now())
+        if following is None:
+            raise HTTPException(422, 'Choose a future date/time for a one-time schedule')
+        if body.enabled:
+            callback_base()
+            if not os.getenv('BITBUCKET_API_TOKEN', '').strip():
+                raise HTTPException(503, 'Set BITBUCKET_API_TOKEN on the backend first')
+        return dict(name=body.name.strip(), cycle_id=body.cycle_id,
+                    frequency=body.frequency, timezone=body.timezone,
+                    start_at=start, next_run_at=following, enabled=body.enabled,
+                    last_error=None)
+
+    @router.get('/schedules')
+    def schedules(project_id: int, s: Session = Depends(db), u: User = Depends(user)):
+        accessible(s, u, project_id)
+        return [public_schedule(value) for value in s.scalars(select(AutomationSchedule).where(
+            AutomationSchedule.project_id == project_id).order_by(AutomationSchedule.id.desc()))]
+
+    @router.post('/schedules')
+    def create_schedule(project_id: int, body: ScheduleIn, s: Session = Depends(db), u: User = Depends(user)):
+        value = AutomationSchedule(project_id=project_id, user_id=u.id, **schedule_values(body, s, u, project_id))
+        s.add(value)
+        s.flush()
+        audit(s, u.id, 'create', 'automation_schedule', value.id, project_id, after=public_schedule(value))
+        s.commit()
+        return public_schedule(value)
+
+    @router.put('/schedules/{schedule_id}')
+    def edit_schedule(schedule_id: int, body: ScheduleIn, s: Session = Depends(db), u: User = Depends(user)):
+        value = obj(s, AutomationSchedule, schedule_id)
+        updates = schedule_values(body, s, u, value.project_id)
+        for key, item in updates.items():
+            setattr(value, key, item)
+        value.user_id = u.id
+        audit(s, u.id, 'update', 'automation_schedule', value.id, value.project_id)
+        s.commit()
+        return public_schedule(value)
+
+    @router.patch('/schedules/{schedule_id}')
+    def toggle_schedule(schedule_id: int, body: ScheduleEnabled, s: Session = Depends(db), u: User = Depends(user)):
+        value = obj(s, AutomationSchedule, schedule_id)
+        accessible(s, u, value.project_id)
+        require_project_role(s, u, value.project_id, ('admin', 'lead'))
+        if body.enabled:
+            local = utc(value.start_at).astimezone(ZoneInfo(value.timezone)).replace(tzinfo=None)
+            updates = schedule_values(ScheduleIn(name=value.name, cycle_id=value.cycle_id,
+                frequency=value.frequency, timezone=value.timezone, start_local=local, enabled=True), s, u, value.project_id)
+            value.next_run_at = updates['next_run_at']
+            value.last_error = None
+            value.user_id = u.id
+        value.enabled = body.enabled
+        audit(s, u.id, 'enable' if body.enabled else 'disable', 'automation_schedule', value.id, value.project_id)
+        s.commit()
+        return public_schedule(value)
 
     @router.get('/runs')
     def runs(project_id: int, s: Session = Depends(db), u: User = Depends(user)):

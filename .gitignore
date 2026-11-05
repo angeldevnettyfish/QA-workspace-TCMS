@@ -68,3 +68,6 @@ backups/
 .codex/
 .env.*
 !.env.example
+
+# User-owned PostgreSQL runtime and database files
+/.local/

@@ -1,0 +1,131 @@
+# Copy scripts/upload_junit.py into this automation repository before using this pipeline.
+pipelines:
+  custom:
+    daily-onboarding:
+      - variables:
+          - name: FRESH_RUN
+            default: "true"
+            allowed-values:
+              - "false"
+              - "true"
+      - step:
+          name: Daily Onboarding Playwright Automation
+          runs-on:
+            - self.hosted
+            - linux.shell
+            - kiwi
+          script:
+            - |
+              set -e
+              PROJECT="/home/docpanel/Automation/automation-script"
+              REPORT_BASE="/home/docpanel/Automation/reports"
+              PENDING_REPORT_BASE="/home/docpanel/Automation/reports_pending"
+              MODULE="onboarding"
+              # Bitbucket checkout workspace
+              WORKSPACE="$BITBUCKET_CLONE_DIR"
+              echo "==================================="
+              echo "1. Updating Automation Code"
+              echo "==================================="
+              mkdir -p "$PROJECT"
+              rsync -a --delete \
+                --exclude='.git/' \
+                --exclude='.env' \
+                --exclude='.venv/' \
+                --exclude='__pycache__/' \
+                --exclude='.pytest_cache/' \
+                --exclude='/test.py' \
+                --exclude='/.test.py.*.tmp' \
+                --exclude='playwright-report/' \
+                --exclude='test-results/' \
+                --exclude='reports/' \
+                --exclude='reports_pending/' \
+                --exclude='artifacts/' \
+                --exclude='artifacts_pending/' \
+                ./ "$PROJECT/"
+              echo "Code Sync Completed"
+              echo "==================================="
+              echo "2. Activating Python Environment"
+              echo "==================================="
+              cd "$PROJECT"
+              # requirements.txt is the shared source for package versions.
+              if [ ! -x "$PROJECT/.venv/bin/python" ]; then
+                python3 -m venv "$PROJECT/.venv"
+              fi
+              source "$PROJECT/.venv/bin/activate"
+              python --version
+              python -m pip install -r requirements.txt
+              python -m pip check
+              python -m playwright install chromium
+              echo "==================================="
+              echo "3. Running Onboarding Automation"
+              echo "==================================="
+              # Decide once, before pytest can update/delete the checkpoint.
+              RUN_MODE=$(python -m tests.resume --run-mode)
+              if [ "$RUN_MODE" = "pending" ]; then
+                # Keep every retry's results, including cases that passed then.
+                mkdir -p "$PENDING_REPORT_BASE/$MODULE"
+                REPORT_DIR=$(mktemp -d "$PENDING_REPORT_BASE/$MODULE/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+                RUN_ID=${REPORT_DIR##*/}
+                ARTIFACT_SUBDIR="artifacts_pending/$MODULE/$RUN_ID"
+              else
+                REPORT_DIR="$REPORT_BASE/$MODULE"
+                ARTIFACT_SUBDIR="artifacts/$MODULE"
+              fi
+              ARTIFACT_DIR="$WORKSPACE/$ARTIFACT_SUBDIR"
+              mkdir -p "$REPORT_DIR" "$ARTIFACT_DIR"
+              echo "Run Mode: $RUN_MODE"
+              echo "Report Destination: $REPORT_DIR"
+              # Only full-run reports are replaced; retry folders are new.
+              if [ "$RUN_MODE" = "full" ]; then
+                rm -f "$REPORT_DIR/report.html" \
+                      "$REPORT_DIR/results.xml" \
+                      "$REPORT_DIR/test-results.xlsx"
+                rm -rf -- "$REPORT_DIR/screenshots" "$ARTIFACT_DIR/screenshots"
+              fi
+              set +e
+              python -m pytest tests/ \
+                -v -s \
+                --html="$REPORT_DIR/report.html" \
+                --self-contained-html \
+                --junitxml="$REPORT_DIR/results.xml"
+              TEST_STATUS=$?
+              set -e
+              echo "==================================="
+              echo "4. Copying Reports to Artifacts"
+              echo "==================================="
+              # Copy generated reports into Bitbucket workspace
+              for REPORT_FILE in report.html results.xml test-results.xlsx; do
+                if [ -f "$REPORT_DIR/$REPORT_FILE" ]; then
+                  cp "$REPORT_DIR/$REPORT_FILE" "$ARTIFACT_DIR/"
+                fi
+              done
+              if [ -d "$REPORT_DIR/screenshots" ]; then
+                cp -a "$REPORT_DIR/screenshots" "$ARTIFACT_DIR/"
+              fi
+              echo "==================================="
+              echo "5. Automation Completed"
+              echo "==================================="
+              echo "Module: $MODULE"
+              echo "Run Mode: $RUN_MODE"
+              echo "Local Report: $REPORT_DIR"
+              echo "Artifact Report: $ARTIFACT_SUBDIR"
+              echo "Test Exit Code: $TEST_STATUS"
+
+              # Added: return this run's JUnit results to Docpanel QA.
+              # Runs even when pytest fails, because TEST_STATUS was captured above.
+              if [ -n "${QA_CALLBACK_URL:-}" ] || [ -n "${QA_CALLBACK_TOKEN:-}" ]; then
+                UPLOAD_STATUS=0
+                python "$WORKSPACE/scripts/upload_junit.py" "$REPORT_DIR/results.xml" --html "$REPORT_DIR/report.html" || UPLOAD_STATUS=$?
+                if [ "$UPLOAD_STATUS" -ne 0 ]; then
+                  echo "Docpanel QA report upload failed. Check the upload error above."
+                  if [ "$TEST_STATUS" -eq 0 ]; then
+                    exit "$UPLOAD_STATUS"
+                  fi
+                fi
+              else
+                echo "Run was started without Docpanel QA callback variables; skipping report upload."
+              fi
+              exit "$TEST_STATUS"
+          artifacts:
+            - artifacts/onboarding/**
+            - artifacts_pending/onboarding/**

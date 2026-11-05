@@ -20,13 +20,17 @@ Open http://localhost:8080. Sign in with `ADMIN_EMAIL` and `ADMIN_PASSWORD` from
 
 For the end-to-end project, test-case, plan, cycle, execution, and report workflow, see the [user manual](./USER-MANUAL.md).
 
+To trigger automation on a separate Bitbucket runner PC and receive JUnit reports here, see [Bitbucket automation setup](./docs/BITBUCKET-AUTOMATION.md).
+
 ## Development without Docker
 Backend requires Python 3.12. From `backend/`, install `requirements-dev.txt` and run:
 ```powershell
 uvicorn app.main:app --env-file ..\.env --host 0.0.0.0 --port 8002 --reload
 ```
 
-If no `DATABASE_URL` is supplied, local development uses `sqlite:///./dev.db`. The initial administrator is seeded once from `.env`; changing the environment variable later does not change the existing account.
+Configure PostgreSQL in the root `.env` using `DB_HOST` (IP or hostname), `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Restart the backend after editing these values. The password is used as entered; URL encoding is handled automatically. Docker Compose uses the same database name, user, and password, with its internal `db` hostname and port 5432. These settings connect to an existing PostgreSQL database; they do not install a database or move existing data. Changing the Compose database name/user/password does not update an existing PostgreSQL volume.
+
+An optional `DATABASE_URL` overrides the separate fields for existing deployments. Leave it unset when using the separate fields. If neither `DATABASE_URL` nor `DB_HOST` is supplied, local development uses `sqlite:///./dev.db`. The initial administrator is seeded once from `.env`; changing the environment variable later does not change the existing account.
 
 User accounts support multiple global roles: Admin, QA Lead, Test Lead, Tester and Viewer. QA Lead and Test Lead have the same lead permissions. Project memberships continue to provide project-specific access for accounts without a global admin or lead role.
 

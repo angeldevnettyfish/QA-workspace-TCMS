@@ -1,20 +1,48 @@
 import {useEffect, useState, useCallback, useRef} from 'react';
+import {createPortal} from 'react-dom';
+import {History as HistoryIcon, CalendarClock} from 'lucide-react';
+import AutomationSchedules from './AutomationSchedules';
 import {Panel, Table, Field, SelectField} from '../components/ui';
 import HtmlReportViewer from '../components/HtmlReportViewer';
+import AutomationHistoryMatrix, {type HistoryRun} from '../components/AutomationHistoryMatrix';
 
 type Row = Record<string, any>;
 type Api = (path:string, options?:RequestInit)=>Promise<any>;
-export default function AutomationRunner({projectId, cycleId, cycles, canLead, api, onReport}: {
-  projectId:number; cycleId:number; cycles:Row[]; canLead:boolean; api:Api; onReport:()=>void;
+function runOutcome(run:Row) {
+  if(run.result==='SUCCESSFUL')return {label:'Passed',tone:'passed'};
+  if(run.result==='FAILED'||run.result==='ERROR')return {label:'Failed',tone:'failed'};
+  if(run.result==='STOPPED')return {label:'Stopped',tone:'neutral'};
+  if(run.state==='IN_PROGRESS')return {label:'Running',tone:'running'};
+  if(run.state==='PENDING'||run.state==='TRIGGERING')return {label:'Pending',tone:'neutral'};
+  return {label:run.state==='DISPATCH_UNCONFIRMED'?'Not confirmed':'Unknown',tone:'neutral'};
+}
+function runTime(value:string) {
+  if(!value)return '—';
+  const date=new Date(/[zZ]$|[+-]\d{2}:\d{2}$/.test(value)?value:value+'Z');
+  return Number.isNaN(date.getTime())?value:date.toLocaleString();
+}
+export default function AutomationRunner({projectId, cycleId, cycles, canLead, api, onReport, headerActions}: {
+  projectId:number; cycleId:number; cycles:Row[]; canLead:boolean; api:Api; onReport:()=>void; headerActions:HTMLElement|null;
 }) {
   const [config,setConfig]=useState({workspace:'',repository:'',branch:'main',pipeline:'qa-automation'});
   const [ready,setReady]=useState<Row>({});
-  const [runs,setRuns]=useState<Row[]>([]);
+  const [runs,setRuns]=useState<(Row & HistoryRun)[]>([]);
   const [selectedCycle,setSelectedCycle]=useState(cycleId);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [message,setMessage]=useState('');
   const [viewReport,setViewReport]=useState<Row|null>(null);
+  const [showHistory,setShowHistory]=useState(false);
+  const [showSchedules,setShowSchedules]=useState(false);
+  const [historyLoading,setHistoryLoading]=useState(false);
+  const [historyError,setHistoryError]=useState('');
+  const historyDialog=useRef<HTMLDialogElement>(null);
+  const recentRuns=runs.slice(0,10);
+  useEffect(()=>{
+    const dialog=historyDialog.current;
+    if(showHistory&&!dialog?.open)dialog?.showModal();
+    if(!showHistory&&dialog?.open)dialog.close();
+  },[showHistory]);
   const reportPanel=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     if(viewReport)reportPanel.current?.scrollIntoView({behavior:'instant',block:'start'});
@@ -39,7 +67,15 @@ export default function AutomationRunner({projectId, cycleId, cycles, canLead, a
     setBusy(true);setError('');setMessage('');
     try{await action();}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}
   };
+  const openHistory=async()=>{
+    setShowHistory(true);setHistoryLoading(true);setHistoryError('');
+    try{await load();}catch(reason){setHistoryError(reason instanceof Error?reason.message:String(reason));}
+    finally{setHistoryLoading(false);}
+  };
   return <>
+    {headerActions&&canLead&&createPortal(<button className="automation-history-button" aria-label="Schedule" aria-haspopup="dialog" onClick={()=>setShowSchedules(true)}><CalendarClock size={16}/><span>Schedule</span></button>,headerActions)}
+    {headerActions&&createPortal(<button className="automation-history-button" aria-label="History" title="View the last 10 automation runs" aria-haspopup="dialog" onClick={()=>void openHistory()}><HistoryIcon size={16}/><span>History</span><span className="automation-history-count">{recentRuns.length}</span></button>,headerActions)}
+    {canLead&&<AutomationSchedules open={showSchedules} onClose={()=>setShowSchedules(false)} projectId={projectId} cycleId={cycleId} cycles={cycles} api={api}/>}
     <Panel title="Run on Bitbucket runner">
       <p>Run a custom pipeline on your runner PC and view its HTML report and test results here.</p>
       {!ready.credentials_configured&&<p className="warning">Set BITBUCKET_API_TOKEN on the backend. For an Atlassian API token, also set BITBUCKET_EMAIL.</p>}
@@ -56,15 +92,28 @@ export default function AutomationRunner({projectId, cycleId, cycles, canLead, a
       })}>{busy?'Please wait…':'Run automation'}</button></>}
       {error&&<p role="alert" className="warning">{error}</p>}{message&&<p role="status">{message}</p>}
     </Panel>
-    <Panel title="Automation runs">
-      <p>Report uploads appear automatically every 10 seconds. Refresh a run to check its Bitbucket pipeline status.</p>
-      <Table headers={['Run','Cycle','Branch / pipeline','Pipeline status','Report','Actions']}>
-        {runs.map(run=><tr key={run.id}><td>#{run.id}<br/><small>{run.created_at}</small></td><td>{cycles.find(c=>c.id===run.cycle_id)?.name??run.cycle_id}</td><td>{run.branch}<br/>{run.pipeline}</td><td>{run.state}{run.result?` / ${run.result}`:''}{run.error&&<p>{run.error}</p>}</td>
-          <td>{run.html_report_url&&<button onClick={()=>setViewReport({...run})}>View HTML report</button>}{run.report?<>{run.report.imported} imported<br/>{run.report.unmatched.length} unmatched{run.report.unmatched.length>0&&<details><summary>Unmatched tests</summary><pre>{JSON.stringify(run.report.unmatched,null,2)}</pre></details>}{run.report.errors.length>0&&<pre>{JSON.stringify(run.report.errors,null,2)}</pre>}</>:run.state==='COMPLETED'?'No report received':'Waiting for report'}</td>
-          <td>{run.url&&<a href={run.url} target="_blank" rel="noreferrer">Open Bitbucket</a>}{canLead&&<button disabled={busy} onClick={()=>void task(async()=>{await api(`/automation/runs/${run.id}/refresh`,{method:'POST'});await load();onReport();})}>Refresh status</button>}</td>
-        </tr>)}
-      </Table>{runs.length===0&&<p>No automation runs yet.</p>}
+    <Panel title="Run reports">
+      <p>Last 10 runs for this project, newest first.</p>
+          <Table headers={['Run','Started','Cycle','Branch / pipeline','Result','Report',...(canLead?['Actions']:[])]}>
+            {recentRuns.map(run=>{const outcome=runOutcome(run);return <tr key={run.id}>
+              <td>#{run.id}</td><td>{runTime(run.created_at)}</td><td>{cycles.find(c=>c.id===run.cycle_id)?.name??run.cycle_id}</td><td>{run.branch}<br/>{run.pipeline}</td>
+              <td><span className={`automation-run-status ${outcome.tone}`}>{outcome.label}</span></td>
+              <td>{run.html_report_url?<button onClick={()=>setViewReport({...run})}>View HTML report</button>:run.report?'Results received':'No report received'}</td>
+              {canLead&&<td><button disabled={busy} onClick={()=>void task(async()=>{await api(`/automation/runs/${run.id}/refresh`,{method:'POST'});await load();onReport();})}>Refresh status</button></td>}
+            </tr>;})}
+          </Table>
+      {recentRuns.length===0&&<p>No automation runs yet.</p>}
     </Panel>
+    <dialog ref={historyDialog} className="automation-history-dialog automation-history-expanded" aria-labelledby="automation-history-title" onCancel={()=>setShowHistory(false)}>
+      <div className="automation-history-header"><h2 id="automation-history-title">Automation history</h2><button className="secondary" onClick={()=>setShowHistory(false)}>Close history</button></div>
+      {historyLoading?<p role="status">Loading history…</p>:historyError?<div role="alert"><p>{historyError}</p><button onClick={()=>void openHistory()}>Retry history</button></div>:<>
+        {recentRuns.length>0&&<>
+          <AutomationHistoryMatrix runs={recentRuns}/>
+
+        </>}
+        {recentRuns.length===0&&<p>No automation runs yet.</p>}
+      </>}
+    </dialog>
     {viewReport&&<div ref={reportPanel} style={{scrollMarginTop:120}}><Panel title={`HTML report — Run #${viewReport.id}`}>
       <button className="secondary" onClick={()=>setViewReport(null)}>Close report</button>
       <HtmlReportViewer key={viewReport.id} runId={viewReport.id} url={viewReport.html_report_url}/>

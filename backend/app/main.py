@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey,
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
 import jwt
-from .models import Base, now, User, Project, Membership, TestFolder, TestCase, CaseVersion, TestPlan, PlanCase, Cycle, CycleCase, Execution, Defect, DefectExecution, AutomationMap, ImportLog, Attachment, AuditEvent, ApiToken, Notification, RequirementRecord, RequirementCase, CustomField
+from .models import Base, now, User, Project, Membership, TestFolder, TestCase, CaseVersion, TestPlan, PlanCase, Cycle, CycleCase, Execution, Defect, DefectExecution, AutomationMap, AutomationTestResults, ImportLog, Attachment, AuditEvent, ApiToken, Notification, RequirementRecord, RequirementCase, CustomField
 from .dashboard import create_dashboard_router
 from .test_cases import create_test_cases_router
 from .bitbucket import create_bitbucket_router
@@ -485,13 +485,9 @@ def import_junit_content(cycle_id,filename,raw,s,u,pid,commit=True,run_id=None):
     cases=root.findall('.//testcase')
     if not cases:
         cases=root.findall('.//{*}testcase')
-    imported=0;unmatched=[];errors=[]
+    imported=0;unmatched=[];errors=[];test_results=[]
     for tc in cases:
         key=(tc.get('classname','')+'.'+tc.get('name','')).strip('.')
-        mapping=s.scalar(select(AutomationMap).where(AutomationMap.project_id==pid,AutomationMap.external_id==key))
-        if not mapping: unmatched.append(key);continue
-        cc=s.scalar(select(CycleCase).where(CycleCase.cycle_id==cycle_id,CycleCase.case_id==mapping.case_id))
-        if not cc: unmatched.append(key+' (not in cycle)');continue
         failure=tc.find('failure')
         if failure is None: failure=tc.find('error')
         if failure is None: failure=tc.find('{*}failure')
@@ -500,8 +496,17 @@ def import_junit_content(cycle_id,filename,raw,s,u,pid,commit=True,run_id=None):
         if skipped is None: skipped=tc.find('{*}skipped')
         status='Failed' if failure is not None else 'Skipped' if skipped is not None else 'Passed'
         notes=((failure.text or failure.get('message',''))[:4000] if failure is not None else '')
+        mapping=s.scalar(select(AutomationMap).where(AutomationMap.project_id==pid,AutomationMap.external_id==key))
+        test_results.append({'external_id':key,'name':tc.get('name',''),'classname':tc.get('classname',''),
+                             'case_id':mapping.case_id if mapping else None,'status':status,
+                             'duration':tc.get('time',''),'message':notes})
+        if not mapping: unmatched.append(key);continue
+        cc=s.scalar(select(CycleCase).where(CycleCase.cycle_id==cycle_id,CycleCase.case_id==mapping.case_id))
+        if not cc: unmatched.append(key+' (not in cycle)');continue
         execution=Execution(cycle_case_id=cc.id,user_id=u.id,status=status,source='Automation',notes=notes,duration=tc.get('time',''));s.add(execution);imported+=1
     log=ImportLog(cycle_id=cycle_id,filename=os.path.basename(filename)[:255],checksum=checksum,imported=imported,unmatched=unmatched,errors=errors);s.add(log);s.flush();audit(s,u.id,'import','junit',log.id,pid,after={'filename':log.filename,'checksum':checksum,'imported':imported,'unmatched':unmatched})
+    if run_id is not None:
+        s.add(AutomationTestResults(run_id=run_id,tests=test_results))
     if commit: s.commit()
     return {'import_id':log.id,'imported':imported,'unmatched':unmatched,'errors':errors,'duplicate':False}
 @app.get('/api/automation/imports')
@@ -635,4 +640,8 @@ def health(s:Session=Depends(db)):
     return {'status':'ok','database':'ok','api_version':'v1'}
 
 app.include_router(create_test_cases_router(db, user, accessible, require_project_role, obj, data, audit, validate_custom_values))
-app.include_router(create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content))
+automation_router = create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content, lambda: SessionLocal())
+app.include_router(automation_router)
+
+from .resources import create_resource_router
+app.include_router(create_resource_router(db, user, elevated, obj, data, audit))

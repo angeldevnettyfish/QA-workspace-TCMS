@@ -1,9 +1,25 @@
 """Shared database models used by API modules."""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index, LargeBinary
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index, LargeBinary, Float, Date
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
+
+class AutomationSchedule(Base):
+    __tablename__ = 'automation_schedules'
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False)
+    cycle_id = Column(Integer, ForeignKey('cycles.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    name = Column(String(120), nullable=False)
+    frequency = Column(String(10), nullable=False)
+    timezone = Column(String(40), nullable=False)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    next_run_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    last_run_id = Column(Integer, ForeignKey('automation_runs.id'))
+    last_error = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=lambda: now())
 
 class AutomationHtmlReport(Base):
     __tablename__ = 'automation_html_reports'
@@ -17,6 +33,11 @@ class BitbucketConfig(Base):
     repository = Column(String(100), nullable=False)
     branch = Column(String(200), nullable=False)
     pipeline = Column(String(200), nullable=False)
+
+class AutomationTestResults(Base):
+    __tablename__ = 'automation_test_results'
+    run_id = Column(Integer, ForeignKey('automation_runs.id'), primary_key=True)
+    tests = Column(JSON, nullable=False, default=list)
 
 class AutomationRun(Base):
     __tablename__ = 'automation_runs'
@@ -107,3 +128,42 @@ class CustomField(Base):
     __tablename__='custom_fields'; __table_args__=(UniqueConstraint('project_id','name'),)
     id=Column(Integer,primary_key=True); project_id=Column(Integer,ForeignKey('projects.id'),nullable=False); name=Column(String(100),nullable=False); field_type=Column(String(20),nullable=False); required=Column(Boolean,default=False); options=Column(JSON,default=list)
 
+
+class ResourceSprint(Base):
+    __tablename__ = 'resource_sprints'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+
+class ResourceItem(Base):
+    __tablename__ = 'resource_items'
+    id = Column(Integer, primary_key=True)
+    sprint_id = Column(Integer, ForeignKey('resource_sprints.id'), nullable=False, index=True)
+    item_id = Column(String(80), nullable=False)
+    start_date = Column(Date)
+    task = Column(Text, nullable=False)
+    activity = Column(String(120), nullable=False, default='')
+    tester = Column(String(120), nullable=False, default='')
+    priority = Column(String(30), nullable=False, default='Medium')
+    estimated_hours = Column(Float)
+    actual_hours = Column(Float)
+    completion_percent = Column(Float)
+    end_date = Column(Date)
+    status = Column(String(60), nullable=False, default='Not Started')
+    impediment = Column(String(200), nullable=False, default='')
+    release = Column(String(200), nullable=False, default='')
+    unplanned_hours = Column(Float)
+    test_cases = Column(Integer)
+    defects = Column(Integer)
+    comment = Column(Text, nullable=False, default='')
+    archived = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ResourceImport(Base):
+    __tablename__ = 'resource_imports'
+    id = Column(Integer, primary_key=True)
+    sprint_id = Column(Integer, ForeignKey('resource_sprints.id'), nullable=False)
+    checksum = Column(String(64), nullable=False)
+    __table_args__ = (UniqueConstraint('sprint_id', 'checksum'),)

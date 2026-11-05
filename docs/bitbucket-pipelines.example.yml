@@ -1,0 +1,20 @@
+# Merge this custom pipeline into the AUTOMATION repository's bitbucket-pipelines.yml.
+# Example: Linux Shell runner with Node, browser dependencies, and Python 3 installed.
+# Adjust runs-on labels to match your runner; see docs/BITBUCKET-AUTOMATION.md.
+pipelines:
+  custom:
+    qa-automation:
+      - step:
+          name: Run tests and return results to Docpanel QA
+          runs-on:
+            - self.hosted
+            - linux.shell
+          script:
+            - npm ci
+            - mkdir -p test-results
+            - PLAYWRIGHT_JUNIT_OUTPUT_FILE=test-results/junit.xml npx playwright test --reporter=junit
+          after-script:
+            # Runs even when tests fail. Copy this helper into the automation repo.
+            - python3 scripts/upload_junit.py 'test-results/junit.xml'
+          artifacts:
+            - test-results/**
