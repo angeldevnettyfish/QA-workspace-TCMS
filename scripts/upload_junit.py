@@ -9,11 +9,13 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
+MAX_HTML_REPORT_BYTES = 100_000_000
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('reports', nargs='+', help='JUnit file paths or glob patterns')
-    parser.add_argument('--html', help='Self-contained HTML report path (maximum 25 MB)')
+    parser.add_argument('--html', help='Self-contained HTML report path (maximum 100 MB)')
     args = parser.parse_args()
     paths = sorted({path for pattern in args.reports for path in glob.glob(pattern, recursive=True) if os.path.isfile(path)})
     if not paths:
@@ -44,12 +46,12 @@ def main():
     if args.html:
         if not os.path.isfile(args.html):
             raise SystemExit('HTML report not found; check the --html path.')
-        if os.path.getsize(args.html) > 25_000_000:
-            raise SystemExit('HTML report exceeds the 25 MB upload limit.')
+        if os.path.getsize(args.html) > MAX_HTML_REPORT_BYTES:
+            raise SystemExit('HTML report exceeds the 100 MB upload limit.')
         with open(args.html, 'rb') as source:
-            html = source.read(25_000_001)
-        if len(html) > 25_000_000 or not html.strip():
-            raise SystemExit('HTML report must be nonempty and at most 25 MB.')
+            html = source.read(MAX_HTML_REPORT_BYTES + 1)
+        if len(html) > MAX_HTML_REPORT_BYTES or not html.strip():
+            raise SystemExit('HTML report must be nonempty and at most 100 MB.')
         body += (f'--{boundary}\r\nContent-Disposition: form-data; name="html_report"; filename="report.html"\r\n'
                  'Content-Type: text/html\r\n\r\n').encode() + html + b'\r\n'
     body += f'--{boundary}--\r\n'.encode()

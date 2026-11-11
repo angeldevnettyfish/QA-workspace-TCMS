@@ -49,6 +49,8 @@ class AutomationRun(Base):
     repository = Column(String(100), nullable=False)
     branch = Column(String(200), nullable=False)
     pipeline = Column(String(200), nullable=False)
+    source = Column(String(20), nullable=False, default='bitbucket', server_default='bitbucket')
+    local_script = Column(String(120))
     pipeline_uuid = Column(String(100))
     build_number = Column(Integer)
     state = Column(String(40), nullable=False, default='TRIGGERING')
@@ -167,3 +169,25 @@ class ResourceImport(Base):
     sprint_id = Column(Integer, ForeignKey('resource_sprints.id'), nullable=False)
     checksum = Column(String(64), nullable=False)
     __table_args__ = (UniqueConstraint('sprint_id', 'checksum'),)
+
+
+class ResourceTimeEntry(Base):
+    __tablename__ = 'resource_time_entries'
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey('resource_items.id'), nullable=False, index=True)
+    member = Column(String(120), nullable=False)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    end_at = Column(DateTime(timezone=True))
+    note = Column(Text, nullable=False, default='')
+
+
+class ResourceEmailSettings(Base):
+    __tablename__ = 'resource_email_settings'
+    id = Column(Integer, primary_key=True)
+    recipient = Column(String(320), nullable=False)
+    send_time = Column(String(5), nullable=False, default='09:00')
+    enabled = Column(Boolean, nullable=False, default=False)
+    last_attempt_on = Column(Date)
+    last_sent_on = Column(Date)
+    last_error = Column(Text)
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)

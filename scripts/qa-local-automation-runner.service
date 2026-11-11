@@ -1,0 +1,16 @@
+[Unit]
+Description=TCMS local automation runner
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/qa-manager
+Environment=TCMS_BASE_URL=http://127.0.0.1:8080
+Environment=REPORT_ROOT=/home/docpanel/Automation_report/onboarding/tcms-local-runs
+EnvironmentFile=/opt/qa-manager/local-runner.env
+ExecStart=/usr/bin/python3 /opt/qa-manager/scripts/local_automation_runner.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

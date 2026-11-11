@@ -1227,3 +1227,80 @@ button:disabled {
 .resource-stats .resource-round-metric.effort span { color: #dfc098; }
 .resource-stats .resource-round-metric.defects span { color: #e5a9b4; }
 .resource-summary-stat > small { margin-top: auto; line-height: 1.5; }
+
+.resource-page button.resource-task-link { display: block; width: 100%; padding: 0; background: transparent; border: 0; color: var(--text); text-align: left; white-space: normal; border-radius: 4px; }
+.resource-task-link:hover span { text-decoration: underline; text-underline-offset: 3px; }
+.resource-sprint-selection { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.resource-sprint-selection > label { min-width: 220px; margin: 0; }
+.resource-back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px; font-size: 13px; text-decoration: none; }
+.resource-back:hover { text-decoration: underline; }
+.resource-open-tasks { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 40px; padding: 10px 16px; border: 1px solid transparent; border-radius: 8px; background: var(--accent-strong); color: #f4fffc; font-size: 13px; font-weight: 650; text-decoration: none; }
+.resource-open-tasks:hover { background: #078e70; }
+.resource-task-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.task-details { box-sizing: border-box; width: min(1180px,calc(100vw - 40px)); max-height: 92dvh; margin: auto; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 16px; overflow: auto; box-shadow: 0 24px 80px #0008; }
+.task-details::backdrop { background: rgb(0 0 0 / 65%); backdrop-filter: blur(3px); }
+.task-details-header { position: sticky; top: 0; z-index: 3; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.task-details-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.task-details-title h2 { margin: 0; font-size: 22px; }
+.task-details-header p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; line-height: 1.6; }
+.task-details-header small { color: var(--muted); }
+.task-details button { display: inline-flex; gap: 7px; align-items: center; justify-content: center; }
+.task-close { flex-shrink: 0; }
+.task-details-body { display: grid; grid-template-columns: minmax(0,1fr) 300px; }
+.task-details-main { min-width: 0; padding: 26px 28px; }
+.task-details-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+.task-details section { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.task-details h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 18px; font-size: 14px; }
+.task-timesheets h3 span { color: var(--muted); font-weight: 400; }
+.task-timesheets .table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: auto; }
+.task-timesheets table { margin: 0; min-width: 560px; font-size: 12px; }
+.task-timesheets td { vertical-align: top; font-variant-numeric: tabular-nums; }
+.task-entry-note { display: block; margin-top: 7px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 220px; }
+.task-live-time { color: #65d6b4; font-variant-numeric: tabular-nums; }
+.task-empty { padding: 18px; color: var(--muted); font-size: 13px; text-align: center; }
+.task-details .task-add-time, .task-details .task-description { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+.task-add-time fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.task-time-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.task-add-time label { font-size: 12px; }
+.task-add-time textarea { width: 100%; resize: vertical; }
+.task-description p { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.task-details-sidebar { padding: 26px 24px; border-left: 1px solid var(--border); background: rgb(120 140 160 / 3%); }
+.task-details-sidebar section+section { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--border); }
+.task-details-sidebar dl { margin: 0; }
+.task-details-sidebar dl div { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 16px; font-size: 12px; }
+.task-details-sidebar dt { color: var(--muted); flex-shrink: 0; }
+.task-details-sidebar dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.task-assignee { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+@media (max-width: 800px) { .task-details { width: calc(100vw - 20px); max-height: 95dvh; } .task-details-body { grid-template-columns: 1fr; } .task-details-header, .task-details-main, .task-details-sidebar { padding: 20px; } .task-details-sidebar { border-left: 0; border-top: 1px solid var(--border); } }
+@media (max-width: 480px) { .task-time-fields { grid-template-columns: 1fr; gap: 0; } }
+
+.resource-tracker-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.resource-tracker-heading h3, .resource-tracker-heading .resource-back { margin: 0; }
+
+.resource-task-page { min-height: 100dvh; width: 100%; padding: 0; background: var(--surface); }
+.resource-task-page .resource-page { min-height: 100dvh; display: flex; flex-direction: column; }
+.resource-task-page .resource-tracker { display: flex; flex-direction: column; flex: 1; margin: 0; border: 0; border-radius: 0; box-shadow: none; min-height: 100dvh; padding: 20px; }
+.resource-task-page .resource-tracker .table-wrap { flex: 1; max-height: none; }
+@media (max-width: 640px) { .resource-task-page .resource-tracker { padding: 12px; } }
+
+.content.resource-task-page { max-width: none; padding: 0; }
+.resource-task-page > .page-header { display: none; }
+.automation-run-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.automation-bitbucket-settings {
+  margin-top: 1rem;
+}
+
+.automation-bitbucket-settings summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.automation-bitbucket-settings[open] summary {
+  margin-bottom: 1rem;
+}

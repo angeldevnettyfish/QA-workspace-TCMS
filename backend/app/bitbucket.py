@@ -8,7 +8,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
@@ -18,7 +20,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,6 +28,9 @@ from .scheduling import next_occurrence, process_due_schedules, utc
 from .models import AutomationSchedule, AutomationRun, AutomationHtmlReport, AutomationTestResults, BitbucketConfig, ImportLog, Project, User, now
 
 SCHEDULER_POLL_SECONDS = 15
+LOCAL_RUNNER_ONLINE_SECONDS = 45
+MAX_HTML_REPORT_BYTES = 100_000_000
+local_runner_last_seen = 0.0
 
 
 class ConfigIn(BaseModel):
@@ -39,6 +44,26 @@ class RunIn(BaseModel):
     cycle_id: int
 
 
+class LocalRunIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    cycle_id: int
+    script: str = Field(min_length=4, max_length=120, pattern=r'^[A-Za-z0-9][A-Za-z0-9_. -]{0,115}\.sh$')
+
+
+class LocalHeartbeat(BaseModel):
+    scripts: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator('scripts')
+    @classmethod
+    def validate_script_names(cls, scripts):
+        if len(set(scripts)) != len(scripts) or any(
+            not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,115}\.sh', script)
+            for script in scripts
+        ):
+            raise ValueError('Runner script names must be unique .sh filenames')
+        return scripts
+
+
 class ScheduleIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     cycle_id: int
@@ -50,6 +75,11 @@ class ScheduleIn(BaseModel):
 
 class ScheduleEnabled(BaseModel):
     enabled: bool
+
+
+class LocalRunFinished(BaseModel):
+    result: Literal['SUCCESSFUL', 'FAILED']
+    error: str | None = Field(default=None, max_length=1000)
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -86,6 +116,17 @@ def callback_base():
 
 
 def create_bitbucket_router(db, user, accessible, require_project_role, obj, project_for_cycle, audit, import_junit_content, session_factory):
+    local_runner_last_seen = 0.0
+    local_runner_scripts = []
+    runner_bearer = HTTPBearer(auto_error=False)
+
+    def require_local_runner(credentials: HTTPAuthorizationCredentials | None = Depends(runner_bearer)):
+        expected = os.getenv('LOCAL_RUNNER_TOKEN', '').strip()
+        if not expected:
+            raise HTTPException(503, 'Local runner is not configured')
+        if not credentials or not hmac.compare_digest(credentials.credentials, expected):
+            raise HTTPException(401, 'Local runner authentication failed')
+
     @asynccontextmanager
     async def scheduler_lifespan(app):
         stop = asyncio.Event()
@@ -112,7 +153,7 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
         log = session.get(ImportLog, run.import_id) if run.import_id else None
         results = session.get(AutomationTestResults, run.id)
         return {'test_results': results.tests if results else None, **{key: getattr(run, key) for key in (
-            'id', 'project_id', 'cycle_id', 'branch', 'pipeline', 'build_number',
+            'id', 'project_id', 'cycle_id', 'branch', 'pipeline', 'source', 'local_script', 'build_number',
             'state', 'result', 'error', 'import_id', 'created_at')},
             'url': f'https://bitbucket.org/{quote(run.workspace, safe="")}/{quote(run.repository, safe="")}/pipelines/results/{run.build_number}' if run.build_number else None,
             'html_report_url': f'/api/automation/runs/{run.id}/html' if session.scalar(select(AutomationHtmlReport.run_id).where(AutomationHtmlReport.run_id == run.id)) else None,
@@ -194,6 +235,98 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
     @router.post('/runs')
     def trigger(body: RunIn, s: Session = Depends(db), u: User = Depends(user)):
         return public_run(dispatch(body.cycle_id, s, u), s)
+
+    @router.get('/local/status')
+    def local_status(project_id: int, s: Session = Depends(db), u: User = Depends(user)):
+        accessible(s, u, project_id)
+        configured = bool(os.getenv('LOCAL_RUNNER_TOKEN', '').strip())
+        online = configured and time.monotonic() - local_runner_last_seen < LOCAL_RUNNER_ONLINE_SECONDS
+        return {
+            'configured': configured,
+            'online': online,
+            'runner': '88 PC',
+            'scripts': local_runner_scripts if online else [],
+        }
+
+    @router.post('/runs/local')
+    def trigger_local(body: LocalRunIn, s: Session = Depends(db), u: User = Depends(user)):
+        nonlocal local_runner_last_seen
+        pid = project_for_cycle(s, body.cycle_id)
+        accessible(s, u, pid)
+        require_project_role(s, u, pid, ('admin', 'lead'))
+        if obj(s, Project, pid).archived:
+            raise HTTPException(400, 'Project is archived')
+        if not os.getenv('LOCAL_RUNNER_TOKEN', '').strip():
+            raise HTTPException(503, 'Local runner is not configured on the backend')
+        if time.monotonic() - local_runner_last_seen >= LOCAL_RUNNER_ONLINE_SECONDS:
+            raise HTTPException(503, 'Local runner on the 88 PC is offline')
+        if body.script not in local_runner_scripts:
+            raise HTTPException(422, 'Select an available local .sh script')
+        active_run = s.scalar(select(AutomationRun.id).where(
+            AutomationRun.source == 'local',
+            AutomationRun.state.in_(('PENDING', 'IN_PROGRESS')),
+        ).limit(1))
+        if active_run:
+            raise HTTPException(409, 'A local automation run is already queued or running')
+        secret = secrets.token_urlsafe(32)
+        run = AutomationRun(
+            project_id=pid, cycle_id=body.cycle_id, user_id=u.id,
+            workspace='local', repository='88-pc', branch='local', pipeline='local',
+            source='local', local_script=body.script, state='PENDING',
+            callback_hash=hashlib.sha256(secret.encode()).hexdigest(),
+            expires_at=now()+timedelta(hours=24))
+        s.add(run)
+        s.flush()
+        audit(s, u.id, 'trigger', 'automation_run', run.id, pid, after={
+            'source': 'local', 'script': body.script,
+        })
+        s.commit()
+        return public_run(run, s)
+
+    @router.post('/local/heartbeat')
+    def local_heartbeat(body: LocalHeartbeat = LocalHeartbeat(), _: None = Depends(require_local_runner)):
+        nonlocal local_runner_last_seen, local_runner_scripts
+        local_runner_last_seen = time.monotonic()
+        local_runner_scripts = body.scripts
+        return {'ok': True}
+
+    @router.post('/local/claim')
+    def local_claim(_: None = Depends(require_local_runner), s: Session = Depends(db)):
+        nonlocal local_runner_last_seen
+        local_runner_last_seen = time.monotonic()
+        run = s.scalar(select(AutomationRun).where(
+            AutomationRun.source == 'local',
+            AutomationRun.state == 'PENDING',
+        ).order_by(AutomationRun.id).with_for_update(skip_locked=True))
+        if not run:
+            return None
+        secret = secrets.token_urlsafe(32)
+        run.callback_hash = hashlib.sha256(secret.encode()).hexdigest()
+        run.expires_at = now()+timedelta(hours=24)
+        run.state = 'IN_PROGRESS'
+        s.commit()
+        return {
+            'run_id': run.id,
+            'script': run.local_script,
+            'callback_url': f'http://127.0.0.1:8080/api/v1/automation/runs/{run.id}/report',
+            'callback_token': secret,
+        }
+
+    @router.post('/local/runs/{run_id}/finish')
+    def local_finish(run_id: int, body: LocalRunFinished, _: None = Depends(require_local_runner), s: Session = Depends(db)):
+        run = s.scalar(select(AutomationRun).where(
+            AutomationRun.id == run_id,
+            AutomationRun.source == 'local',
+        ).with_for_update())
+        if not run:
+            raise HTTPException(404, 'Local automation run not found')
+        if run.state != 'IN_PROGRESS':
+            raise HTTPException(409, 'Local automation run is not in progress')
+        run.state = 'COMPLETED'
+        run.result = body.result
+        run.error = body.error
+        s.commit()
+        return public_run(run, s)
 
     def public_schedule(value):
         result = {key: getattr(value, key) for key in (
@@ -322,9 +455,9 @@ def create_bitbucket_router(db, user, accessible, require_project_role, obj, pro
         if html_report is not None:
             if not (html_report.filename or '').lower().endswith(('.html', '.htm')):
                 raise HTTPException(415, 'Upload a .html report')
-            html_content = await html_report.read(25_000_001)
-            if len(html_content) > 25_000_000:
-                raise HTTPException(413, 'HTML report exceeds the 25 MB limit')
+            html_content = await html_report.read(MAX_HTML_REPORT_BYTES + 1)
+            if len(html_content) > MAX_HTML_REPORT_BYTES:
+                raise HTTPException(413, 'HTML report exceeds the 100 MB limit')
             if not html_content.strip():
                 raise HTTPException(400, 'HTML report is empty')
         if run.import_id:

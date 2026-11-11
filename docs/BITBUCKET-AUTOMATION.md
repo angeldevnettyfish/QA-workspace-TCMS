@@ -2,6 +2,46 @@
 
 Flow: Automation → Run automation → Bitbucket custom pipeline → self-hosted runner PC → JUnit upload → Automation run history, Execution, and CSV Reports.
 
+## Run locally on the 88 PC (without Bitbucket)
+
+The Automation header has **Schedule**, **Local**, and **History** buttons. Bitbucket remains available through **Run on Bitbucket**. Click **Local**, choose a report cycle and one of the `.sh` files advertised by the 88 PC runner, then click **Run locally**. The runner executes that script from a dedicated folder and uploads its JUnit and HTML reports to the selected cycle. The browser cannot provide an arbitrary shell command or path.
+
+On the 88 PC, configure the private runner token and approved script folder in `/opt/qa-manager/local-runner.env`:
+
+```sh
+cd /opt/qa-manager
+umask 077
+python3 -c 'import secrets; print("LOCAL_RUNNER_TOKEN=" + secrets.token_urlsafe(48))' > local-runner.env
+printf '%s\n' \
+  'AUTOMATION_DIR=/home/docpanel/Automation/onboarding_pipeline_testscript' \
+  'LOCAL_RUN_SCRIPTS_DIR=/home/docpanel/Automation/onboarding_pipeline_testscript/tcms-scripts' >> local-runner.env
+chmod 600 local-runner.env
+mkdir -p /home/docpanel/Automation/onboarding_pipeline_testscript/tcms-scripts
+docker compose up -d --force-recreate backend
+mkdir -p ~/.config/systemd/user
+install -m 644 scripts/qa-local-automation-runner.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now qa-local-automation-runner.service
+```
+
+Put one `.sh` file per selectable test run directly inside `tcms-scripts`. For example, `run-onboarding.sh` can contain:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/docpanel/Automation/onboarding_pipeline_testscript
+source .venv/bin/activate
+python -m pytest tests/ -v -s "$@"
+```
+
+The runner invokes the selected file with Bash and appends the HTML/JUnit output arguments. Forward `"$@"` to the single pytest command so the reports are written for TCMS; the runner uploads them automatically. Add a script file and it should appear in the Automation page within about 10 seconds. When changing `LOCAL_RUN_SCRIPTS_DIR`, restart the service with `systemctl --user restart qa-local-automation-runner.service`. Check it with `systemctl --user status qa-local-automation-runner.service`. To start the user service automatically at boot even when the account is logged out, an administrator must enable systemd lingering for `docpanel`.
+
+Use `AUTOMATION_DIR` for the script's initial working directory and `LOCAL_RUN_SCRIPTS_DIR` for the folder of selectable scripts. Put project-specific paths, environment activation, resume commands and test arguments inside each `.sh` file. The runner does not require an onboarding-specific `tests.resume` module. Pytest HTML output requires `pytest-html` in the test project's environment. Other tools can ignore the appended pytest arguments and write reports to the supplied `QA_JUNIT_XML` and `QA_HTML_REPORT` paths instead.
+
+Keep `scripts/upload_junit.py` alongside `scripts/local_automation_runner.py` in the TCMS deployment. The runner uses the test project's `.venv/bin/python` when present, otherwise its own Python interpreter, to upload reports. Optionally set `LOCAL_PYTHON` to an absolute Python executable path in `local-runner.env`.
+
+Only project admins/leads can queue local runs. The runner executes the fixed test suite as the `docpanel` OS user. Keep access to this account and the local token restricted. This mode does not dispatch a Bitbucket pipeline.
+
 ## Backend setup
 
 Set these values in the app's `.env`, then restart the backend:
@@ -18,7 +58,7 @@ Use an Atlassian API token with pipeline read and write scopes (`read:pipeline:b
 
 ## Automation repository setup
 
-For `docpanel/onboarding_pipeline_testscript` on branch `main`, use custom pipeline `daily-onboarding`. The supplied pytest pipeline already generates `$REPORT_DIR/results.xml`. Its tailored configuration is [onboarding-bitbucket-pipelines.yml](./onboarding-bitbucket-pipelines.yml): copy it to the automation repository as `bitbucket-pipelines.yml`, together with `scripts/upload_junit.py`. It retains the existing `self.hosted`, `linux.shell`, `kiwi` labels, resume logic, and HTML/Excel/screenshot artifacts. It uploads the current run's JUnit XML and HTML report before returning pytest's exit code; an upload failure also fails an otherwise successful test step. Manual Bitbucket runs without callback variables continue to generate artifacts and skip the app upload. The app imports JUnit execution results and stores the self-contained HTML report for viewing from Automation → View HTML report. HTML/Excel/screenshots also remain in the existing locations and Bitbucket artifacts.
+For `docpanel/onboarding_pipeline_testscript` on branch `main`, use custom pipeline `daily-onboarding`. The supplied pytest pipeline already generates `$REPORT_DIR/results.xml`. Its tailored configuration is [onboarding-bitbucket-pipelines.yml](./onboarding-bitbucket-pipelines.yml): copy it to the automation repository as `bitbucket-pipelines.yml`, together with `scripts/upload_junit.py`. It retains the existing `self.hosted`, `linux.shell`, `kiwi` labels, resume logic, and HTML/Excel/screenshot artifacts. It uploads the current run's JUnit XML and HTML report before returning pytest's exit code; an upload failure also fails an otherwise successful test step. Manual Bitbucket runs without callback variables continue to generate artifacts and skip the app upload. The app imports JUnit execution results and stores self-contained HTML reports up to 100 MB for viewing from Automation → View HTML report. HTML/Excel/screenshots also remain in the existing locations and Bitbucket artifacts.
 
 1. Copy `scripts/upload_junit.py` into the automation repository at the same path.
 2. Merge `docs/bitbucket-pipelines.example.yml` into that repository's `bitbucket-pipelines.yml`. The example uses Playwright on a Linux Shell runner. Replace the test command/report path for your framework; keep JUnit XML output and the upload in `after-script` so failed tests also report results.

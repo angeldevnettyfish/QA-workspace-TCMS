@@ -49,3 +49,17 @@ def test_runner_merges_reports_and_posts_multipart_without_logging_secret(tmp_pa
     output = capsys.readouterr().out
     assert '42' in output
     assert 'private-run-token' not in output
+
+
+def test_runner_rejects_html_above_configured_limit(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location('upload_junit', Path(__file__).resolve().parents[2]/'scripts/upload_junit.py')
+    uploader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(uploader)
+    junit = tmp_path/'results.xml'
+    junit.write_text('<testsuite/>')
+    report = tmp_path/'report.html'
+    report.write_bytes(b'x' * 11)
+    monkeypatch.setattr(uploader.sys, 'argv', ['upload_junit.py', str(junit), '--html', str(report)])
+    monkeypatch.setattr(uploader, 'MAX_HTML_REPORT_BYTES', 10)
+    with pytest.raises(SystemExit, match='HTML report exceeds the 100 MB upload limit'):
+        uploader.main()

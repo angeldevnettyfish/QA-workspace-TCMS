@@ -38,3 +38,27 @@ interpreted as a spreadsheet formula is prefixed with an apostrophe on export.
 Data is stored in resource_sprints, resource_items and resource_imports. Migration
 0008 creates the tables. Create, edit, archive, restore and import actions are
 recorded in the audit log. Imported CSV contents are not embedded in migrations.
+
+## Daily email summary
+
+On the Resource Management overview, an Admin or QA/Test Lead can set the
+recipient, daily send time (India Standard Time), and enable/disable the summary.
+The email includes active task details for all sprints, employee workload totals,
+and timesheets started that day. **Send summary now** sends an immediate preview
+to the configured recipient.
+
+Gmail delivery requires a Gmail App Password configured only on the backend:
+
+```dotenv
+RESOURCE_SMTP_HOST=smtp.gmail.com
+RESOURCE_SMTP_PORT=587
+RESOURCE_SMTP_USERNAME=sender@gmail.com
+RESOURCE_SMTP_PASSWORD=your-gmail-app-password
+RESOURCE_SMTP_FROM=sender@gmail.com
+RESOURCE_REPORT_RECIPIENT=kavaskar.docpanel@gmail.com
+```
+
+Never put the Gmail App Password in the browser or chat. Recreate the backend
+after updating `.env`. The scheduler runs in the backend process, uses Asia/Kolkata
+time, and records the last send date or delivery error in the Resource Management
+email panel.

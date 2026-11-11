@@ -51,6 +51,7 @@ Thumbs.db
 
 # QA Manager local files
 .env
+local-runner.env
 node_modules/
 dist/
 __pycache__/

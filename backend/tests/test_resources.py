@@ -1,7 +1,11 @@
 import csv
 import io
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import pytest
 from test_srs_workflows import client
+from app import main, resources
+from app.models import ResourceEmailSettings
 from app.resources import HEADERS, parse_tracker
 
 
@@ -72,6 +76,124 @@ def test_task_edit_archive_restore_and_validation(client):
     assert client.patch(f"/api/resources/items/{item['id']}/archive?archived=false").status_code==200
     assert len(client.get(path).json())==1
     assert client.post('/api/resources/sprints',json={'name':'New sprint'}).status_code==409
+
+
+def test_timesheets_preserve_existing_hours_and_validate_intervals(client):
+    sprint=client.post('/api/resources/sprints',json={'name':'Timesheets'}).json()
+    path=f"/api/resources/sprints/{sprint['id']}/items"
+    item=client.post(path,json={'item_id':'T-1','task':'Regression','actual_hours':3}).json()
+    base=f"/api/resources/items/{item['id']}"
+    entry={'member':'Tester','start_at':'2026-01-01T10:00:00+05:30','end_at':'2026-01-01T11:30:00+05:30','note':'Regression complete'}
+    saved=client.post(base+'/timesheets',json=entry)
+    assert saved.status_code==200, saved.text
+    assert client.get(path).json()[0]['actual_hours']==4.5
+    assert client.get(base+'/timesheets').json()[0]['note']=='Regression complete'
+    assert client.post(base+'/timesheets',json={**entry,'end_at':entry['start_at']}).status_code==422
+    assert client.post(base+'/timesheets',json={**entry,'end_at':'2099-01-01T00:00:00Z'}).status_code==422
+    assert client.post(base+'/timesheets',json={**entry,'member':'  '}).status_code==422
+    other=client.post(path,json={'item_id':'T-2','task':'Other task'}).json()
+    assert client.delete(f"/api/resources/items/{other['id']}/timesheets/{saved.json()['id']}").status_code==404
+    assert client.delete(base+f"/timesheets/{saved.json()['id']}").status_code==200
+    assert client.get(path).json()[0]['actual_hours']==3
+    assert client.get(base+'/timesheets').json()==[]
+
+
+def test_timer_survives_reload_and_prevents_duplicate_start(client):
+    sprint=client.post('/api/resources/sprints',json={'name':'Timers'}).json()
+    path=f"/api/resources/sprints/{sprint['id']}/items"
+    item=client.post(path,json={'item_id':'T-1','task':'Regression','tester':'Solai','actual_hours':2}).json()
+    base=f"/api/resources/items/{item['id']}"
+    started=client.post(base+'/timer/start')
+    assert started.status_code==200, started.text
+    assert started.json()['member']=='Solai'
+    assert client.post(base+'/timer/start').status_code==409
+    rows=client.get(base+'/timesheets').json()
+    assert len(rows)==1 and rows[0]['end_at'] is None
+    assert client.delete(base+f"/timesheets/{rows[0]['id']}").status_code==409
+    stopped=client.post(base+'/timer/stop')
+    assert stopped.status_code==200, stopped.text
+    assert stopped.json()['end_at'] is not None
+    assert client.get(path).json()[0]['actual_hours']>=2
+    assert client.post(base+'/timer/stop').status_code==409
+    client.patch(base+'/archive')
+    assert client.post(base+'/timer/start').status_code==409
+    client.post('/api/auth/logout')
+    assert client.get(base+'/timesheets').status_code==401
+
+
+def test_resource_email_settings_and_manual_summary(client, monkeypatch):
+    settings_url='/api/resources/email-settings'
+    initial=client.get(settings_url)
+    assert initial.status_code==200
+    assert initial.json()['recipient']=='kavaskar.docpanel@gmail.com'
+    assert initial.json()['enabled'] is False
+    saved=client.put(settings_url,json={
+        'recipient':'kavaskar.docpanel@gmail.com','send_time':'18:30','enabled':True,
+    })
+    assert saved.status_code==200, saved.text
+    assert saved.json()['send_time']=='18:30'
+    assert saved.json()['enabled'] is True
+    assert client.put(settings_url,json={
+        'recipient':'not-an-email','send_time':'25:90','enabled':True,
+    }).status_code==422
+
+    sprint=client.post('/api/resources/sprints',json={'name':'Email sprint'}).json()
+    item=client.post(f"/api/resources/sprints/{sprint['id']}/items",json={
+        'item_id':'MAIL-01','task':'Run regression','tester':'Test Employee',
+        'estimated_hours':4,'actual_hours':2,'status':'In Progress','comment':'Daily note',
+    }).json()
+    client.post(f"/api/resources/items/{item['id']}/timesheets",json={
+        'member':'Test Employee','start_at':'2026-11-11T09:00:00+05:30',
+        'end_at':'2026-11-11T10:00:00+05:30','note':'Worked on regression',
+    })
+    monkeypatch.setenv('RESOURCE_SMTP_HOST','smtp.gmail.com')
+    monkeypatch.setenv('RESOURCE_SMTP_USERNAME','sender@example.test')
+    monkeypatch.setenv('RESOURCE_SMTP_PASSWORD','app-password-for-test')
+    monkeypatch.setenv('RESOURCE_SMTP_FROM','sender@example.test')
+    messages=[]
+    monkeypatch.setattr(resources,'smtp_send',messages.append)
+    sent=client.post(settings_url+'/send-now')
+    assert sent.status_code==200, sent.text
+    assert sent.json()=={'sent':True,'recipient':'kavaskar.docpanel@gmail.com'}
+    assert 'Test Employee' in messages[0].as_string()
+    assert 'Run regression' in messages[0].as_string()
+    assert 'Daily note' in messages[0].as_string()
+    assert 'Worked on regression' in messages[0].as_string()
+    assert 'app-password-for-test' not in messages[0].as_string()
+
+
+def test_resource_email_daily_scheduler_sends_once_and_surfaces_missing_smtp(client, monkeypatch):
+    settings_url='/api/resources/email-settings'
+    assert client.put(settings_url,json={
+        'recipient':'kavaskar.docpanel@gmail.com','send_time':'09:00','enabled':True,
+    }).status_code==200
+    for key,value in {
+        'RESOURCE_SMTP_HOST':'smtp.gmail.com',
+        'RESOURCE_SMTP_USERNAME':'sender@example.test',
+        'RESOURCE_SMTP_PASSWORD':'app-password-for-test',
+        'RESOURCE_SMTP_FROM':'sender@example.test',
+    }.items():
+        monkeypatch.setenv(key,value)
+    sent=[]
+    monkeypatch.setattr(resources,'smtp_send',sent.append)
+    when=datetime(2026,11,11,9,1,tzinfo=ZoneInfo('Asia/Kolkata'))
+    resources.process_due_resource_email(main.SessionLocal,when)
+    resources.process_due_resource_email(main.SessionLocal,when)
+    assert len(sent)==1
+    with main.SessionLocal() as session:
+        settings=session.get(ResourceEmailSettings,1)
+        assert settings.last_sent_on.isoformat()=='2026-11-11'
+        assert settings.last_error is None
+
+    monkeypatch.delenv('RESOURCE_SMTP_HOST',raising=False)
+    monkeypatch.delenv('RESOURCE_SMTP_USERNAME',raising=False)
+    monkeypatch.delenv('RESOURCE_SMTP_PASSWORD',raising=False)
+    monkeypatch.delenv('RESOURCE_SMTP_FROM',raising=False)
+    next_day=datetime(2026,11,12,9,1,tzinfo=ZoneInfo('Asia/Kolkata'))
+    resources.process_due_resource_email(main.SessionLocal,next_day)
+    with main.SessionLocal() as session:
+        settings=session.get(ResourceEmailSettings,1)
+        assert settings.last_error=='Gmail SMTP is not configured on the backend.'
 
 
 def test_invalid_import_is_atomic(client, source):

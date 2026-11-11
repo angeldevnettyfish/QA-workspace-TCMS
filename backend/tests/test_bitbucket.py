@@ -115,6 +115,98 @@ def test_missing_setup_and_dispatch_failure_are_visible(client, configured, monk
     assert len(client.get(f"/api/automation/runs?project_id={project['id']}").json()) == 1
 
 
+def test_local_runner_queue_report_and_completion(client, monkeypatch):
+    monkeypatch.setenv('LOCAL_RUNNER_TOKEN', 'local-runner-test-token')
+    project = make_project(client)
+    case = make_case(client, project['id'])
+    cycle, _ = make_cycle(client, project, case)
+
+    status_url = f"/api/automation/local/status?project_id={project['id']}"
+    assert client.get(status_url).json() == {
+        'configured': True, 'online': False, 'runner': '88 PC', 'scripts': [],
+    }
+    worker_headers = {'Authorization': 'Bearer local-runner-test-token'}
+    assert client.post('/api/automation/local/heartbeat').status_code == 401
+    heartbeat = client.post(
+        '/api/automation/local/heartbeat',
+        headers=worker_headers,
+        json={'scripts': ['run-onboarding.sh', 'run-smoke.sh']},
+    )
+    assert heartbeat.status_code == 200
+    assert client.get(status_url).json() == {
+        'configured': True, 'online': True, 'runner': '88 PC',
+        'scripts': ['run-onboarding.sh', 'run-smoke.sh'],
+    }
+    assert client.post(
+        '/api/automation/local/heartbeat',
+        headers=worker_headers,
+        json={'scripts': ['../unsafe.sh']},
+    ).status_code == 422
+
+    assert client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'command': 'not accepted',
+    }).status_code == 422
+    assert client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'script': 'unlisted.sh',
+    }).status_code == 422
+    queued = client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'script': 'run-onboarding.sh',
+    })
+    assert queued.status_code == 200, queued.text
+    run = queued.json()
+    assert run['source'] == 'local'
+    assert run['state'] == 'PENDING'
+    assert run['pipeline'] == 'local'
+    assert run['local_script'] == 'run-onboarding.sh'
+    assert 'callback_token' not in run
+
+    assert client.post('/api/automation/local/claim').status_code == 401
+    claimed = client.post('/api/automation/local/claim', headers=worker_headers).json()
+    assert claimed['run_id'] == run['id']
+    assert claimed['script'] == 'run-onboarding.sh'
+    assert claimed['callback_url'].endswith(f"/{run['id']}/report")
+    assert claimed['callback_token']
+    assert client.get(f"/api/automation/runs?project_id={project['id']}").json()[0]['state'] == 'IN_PROGRESS'
+    assert client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'script': 'run-smoke.sh',
+    }).status_code == 409
+
+    response = upload(client, run, claimed['callback_token'])
+    assert response.status_code == 200, response.text
+    finished = client.post(
+        f"/api/automation/local/runs/{run['id']}/finish",
+        headers=worker_headers,
+        json={'result': 'SUCCESSFUL'},
+    )
+    assert finished.status_code == 200, finished.text
+    assert finished.json()['state'] == 'COMPLETED'
+    assert finished.json()['result'] == 'SUCCESSFUL'
+    assert finished.json()['report']['imported'] == 0
+
+
+def test_local_run_requires_online_runner_and_lead(client, monkeypatch):
+    monkeypatch.delenv('LOCAL_RUNNER_TOKEN', raising=False)
+    project = make_project(client)
+    case = make_case(client, project['id'])
+    cycle, _ = make_cycle(client, project, case)
+    assert client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'script': 'run-onboarding.sh',
+    }).status_code == 503
+
+    monkeypatch.setenv('LOCAL_RUNNER_TOKEN', 'local-runner-test-token')
+    client.post('/api/users', json={
+        'email': 'local-viewer@test.local', 'name': 'Viewer',
+        'password': 'viewer-password-2026', 'role': 'viewer',
+    })
+    client.post('/api/auth/logout')
+    client.post('/api/auth/login', json={
+        'email': 'local-viewer@test.local', 'password': 'viewer-password-2026',
+    })
+    assert client.post('/api/automation/runs/local', json={
+        'cycle_id': cycle['id'], 'script': 'run-onboarding.sh',
+    }).status_code == 403
+
+
 def test_html_report_upload_view_access_and_retry(client, configured):
     project, cycle, calls = configured
     run, variables = trigger(client, cycle, calls)
@@ -157,8 +249,10 @@ def test_html_can_be_attached_to_xml_only_run_without_duplicate_execution(client
     assert len(client.get(f"/api/executions?cycle_id={cycle['id']}").json()) == 1
 
 
-@pytest.mark.parametrize('filename,content,status', [('report.txt', b'hello', 415), ('report.html', b' ', 400), ('report.html', b'x'*25_000_001, 413)], ids=['wrong-extension', 'empty-html', 'oversized-html'])
-def test_rejected_html_does_not_partially_import_results(client, configured, filename, content, status):
+@pytest.mark.parametrize('filename,content,status', [('report.txt', b'hello', 415), ('report.html', b' ', 400), ('report.html', b'x'*101, 413)], ids=['wrong-extension', 'empty-html', 'oversized-html'])
+def test_rejected_html_does_not_partially_import_results(client, configured, monkeypatch, filename, content, status):
+    if status == 413:
+        monkeypatch.setattr(bitbucket, 'MAX_HTML_REPORT_BYTES', 100)
     _, cycle, calls = configured
     run, variables = trigger(client, cycle, calls)
     response = client.post(f"/api/automation/runs/{run['id']}/report", headers={'Authorization': 'Bearer '+variables['QA_CALLBACK_TOKEN']}, files={
@@ -172,7 +266,7 @@ def test_rejected_html_does_not_partially_import_results(client, configured, fil
 def test_html_larger_than_old_limit_is_stored_and_viewable(client, configured):
     _, cycle, calls = configured
     run, variables = trigger(client, cycle, calls)
-    html = b'<html><body>' + b'x' * 10_000_001 + b'</body></html>'
+    html = b'<html><body>' + b'x' * 26_000_001 + b'</body></html>'
     response = client.post(f"/api/automation/runs/{run['id']}/report", headers={'Authorization': 'Bearer '+variables['QA_CALLBACK_TOKEN']}, files={
         'file': ('results.xml', XML, 'application/xml'), 'html_report': ('report.html', html, 'text/html'),
     })
