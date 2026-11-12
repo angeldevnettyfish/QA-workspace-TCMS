@@ -2,6 +2,13 @@ import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent} from 
 import {Plus, Upload, Download, Pencil, Archive, RotateCcw, Users, Clock, CheckCircle2, AlertCircle, ArrowLeft, List} from 'lucide-react';
 import {Panel, Table} from '../components/ui';
 import ResourceTaskDetails from './ResourceTaskDetails';
+import {ScrumProvider,useScrum} from '../pm/lib/scrumState';
+import {sprintLabel,spentHours,isCurrentSprint} from '../pm/lib/scrum';
+import {bugTrend,chartPoints} from '../pm/lib/bugTrend';
+import Scrum from '../pm/pages/Scrum';
+import Planning from '../pm/pages/Planning';
+import SpentTime from '../pm/pages/SpentTime';
+import '../pm/pm.css';
 
 type Api = (path:string, options?:RequestInit)=>Promise<any>;
 type Sprint = {id:number;name:string};
@@ -19,7 +26,75 @@ function RoundMetric({value,label,tone='tasks'}:{value:number;label:string;tone?
   return <div className={`resource-round-metric ${tone}`}><div><strong title={fmt(value)}>{fmt(value)}</strong><span>{label}</span></div></div>;
 }
 
-export default function ResourceManagement({api}:{api:Api}) {
+
+type BoardTask={status:string;sprintId:string;issues:number;testResult:string};
+type TrendRow={id:string;name:string;bugs:number;testCases:number;automated:number;tasks:number;done:number;completion:number};
+type Series={key:'bugs'|'testCases'|'automated';label:string;className:string};
+type Dot=TrendRow&{value:number;x:number;y:number};
+function TrendChart({trend,series,label}:{trend:TrendRow[];series:Series[];label:string}) {
+  const width=640,height=240;
+  const geo=chartPoints(trend,width,height,series.map(s=>s.key));
+  const short=(text:string)=>text.length>14?`${text.slice(0,13)}…`:text;
+  const dots=(s:Series)=>geo.series[s.key] as Dot[];
+  return <div className="trend-chart">
+    {series.length>1&&<div className="trend-legend">{series.map(s=><span key={s.key} className={s.className}><i/>{s.label}</span>)}</div>}
+    <svg className="bug-trend" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label}: ${trend.map(row=>`${row.name} ${series.map(s=>`${s.label} ${row[s.key]}`).join(', ')}`).join('; ')}`}>
+      {geo.ticks.map((tick:{value:number;y:number})=><g key={tick.value}><line x1={geo.pad.left} x2={width-geo.pad.right} y1={tick.y} y2={tick.y} className="bug-trend-grid"/><text x={geo.pad.left-8} y={tick.y} className="bug-trend-axis" textAnchor="end" dominantBaseline="middle">{tick.value}</text></g>)}
+      {series.map(s=>dots(s).length>1&&<polyline key={s.key} points={dots(s).map(point=>`${point.x},${point.y}`).join(' ')} className={`trend-line ${s.className}`}/>)}
+      {series.map((s,index)=>dots(s).map(point=><g key={`${s.key}-${point.id}`}>
+        <title>{`${point.name}: ${s.label} ${point.value}`}</title>
+        <circle cx={point.x} cy={point.y} r={5} className={`trend-dot ${s.className}`}/>
+        <text x={point.x} y={point.y+(index===0?-13:19)} className="bug-trend-value" textAnchor="middle">{point.value}</text>
+      </g>))}
+      {dots(series[0]).map(point=><text key={point.id} x={point.x} y={height-geo.pad.bottom+20} className="bug-trend-axis" textAnchor="middle">{short(point.name)}</text>)}
+    </svg>
+  </div>;
+}
+
+function BoardSummary() {
+  const {people,sprints}=useScrum() as {people:{tasks:BoardTask[]}[];sprints:{id:string;name:string}[]};
+  const tasks=people.flatMap(person=>person.tasks);
+  const stat=(list:BoardTask[])=>{const done=list.filter(task=>task.status==='Done').length;return{tasks:list.length,done,percent:list.length?Math.round(done/list.length*100):0,issues:list.reduce((sum,task)=>sum+(task.issues||0),0),failed:list.filter(task=>task.testResult==='Failed').length};};
+  const overall=stat(tasks);
+  const sortedSprints=[...sprints].sort((a,b)=>((b as {start?:string}).start||'').localeCompare((a as {start?:string}).start||''));
+  const latest=sortedSprints[0];
+  const latestName=latest?sprintLabel(latest,sprints.indexOf(latest)):'';
+  const current=latest?stat(tasks.filter(task=>task.sprintId===latest.id)):overall;
+  const trend=bugTrend(people as never,sprints as never) as TrendRow[];
+  return <Panel title={latestName?`Sprint board summary · ${latestName}`:'Sprint board summary'}>
+    <div className="resource-stats">
+      <div className="resource-summary-stat"><CheckCircle2 size={18}/><span>Task completion</span><div className="resource-round-metrics"><RoundMetric value={current.percent} label="% done"/><RoundMetric value={current.tasks} label="Tasks" tone="tested"/></div><small>{current.done} of {current.tasks} tasks done</small></div>
+      <div className="resource-summary-stat"><AlertCircle size={18}/><span>Issues entered</span><div className="resource-round-metrics"><RoundMetric value={current.issues} label="Issues" tone="defects"/><RoundMetric value={current.failed} label="Failed" tone="effort"/></div><small>{latestName?'Latest sprint':'Across all sprints'}</small></div>
+      {trend.length>0&&<div className="resource-summary-stat resource-trend"><AlertCircle size={18}/><span>Bugs entered per sprint</span><TrendChart trend={trend} label="Bugs entered per sprint" series={[{key:'bugs',label:'Bugs entered',className:'s-bugs'}]}/></div>}
+      {trend.length>0&&<div className="resource-summary-stat resource-trend wide"><CheckCircle2 size={18}/><span>Test cases per sprint</span><TrendChart trend={trend} label="Test cases per sprint" series={[{key:'testCases',label:'Total test cases',className:'s-total'},{key:'automated',label:'Automated',className:'s-auto'}]}/></div>}
+    </div>
+  </Panel>;
+}
+
+type PivotTask={status:string;sprintId:string;issues:number;estimate:number};
+function TeamPivot() {
+  const {people,sprints}=useScrum() as {people:{id:string;name:string;tasks:PivotTask[]}[];sprints:{id:string;name:string;start?:string;end?:string}[]};
+  // The sprint running today; with none running, the newest one.
+  const ordered=[...sprints].sort((a,b)=>(b.start||'').localeCompare(a.start||''));
+  const sprint=ordered.find(item=>isCurrentSprint(item as never))??ordered[0];
+  const sprintName=sprint?sprintLabel(sprint as never,sprints.indexOf(sprint)):'';
+  const round=(value:number)=>Math.round(value*100)/100;
+  const rows=sprint?people.map(person=>{
+    const own=person.tasks.filter(task=>task.sprintId===sprint.id);
+    const done=own.filter(task=>task.status==='Done').length;
+    return{id:person.id,name:person.name.trim()||'Unnamed',tasks:own.length,done,estimated:own.reduce((n,task)=>n+(task.estimate||0),0),spent:own.reduce((n,task)=>n+spentHours(task as never),0),issues:own.reduce((n,task)=>n+(task.issues||0),0),percent:own.length?Math.round(done/own.length*100):0};
+  }).filter(row=>row.tasks>0):[];
+  const total=rows.reduce((sum,row)=>({tasks:sum.tasks+row.tasks,done:sum.done+row.done,estimated:sum.estimated+row.estimated,spent:sum.spent+row.spent,issues:sum.issues+row.issues}),{tasks:0,done:0,estimated:0,spent:0,issues:0});
+  const totalPercent=total.tasks?Math.round(total.done/total.tasks*100):0;
+  return <Panel title={sprintName?`Team workload · ${sprintName}`:'Team workload'} className="resource-workload">
+    {rows.length===0?<p className="resource-hint">{sprint?'No tasks in this sprint yet. Add tasks on the Scrum tab.':'Add a sprint on the Scrum tab to see the team workload.'}</p>:<Table headers={['Person','Estimated hours','Spent hours','Issues logged','Task completion']}>
+      {rows.map(row=><tr key={row.id}><td>{row.name}</td><td>{fmt(round(row.estimated))}</td><td className={row.spent>row.estimated&&row.estimated>0?'over-estimate':undefined}>{fmt(round(row.spent))}</td><td>{row.issues}</td><td><div className="progress-cell"><span className="progress-bar"><span style={{width:`${row.percent}%`}}/></span>{row.percent}%<small className="muted">{row.done}/{row.tasks}</small></div></td></tr>)}
+      <tr className="resource-total"><td><strong>Total</strong></td><td><strong>{fmt(round(total.estimated))}</strong></td><td><strong>{fmt(round(total.spent))}</strong></td><td><strong>{total.issues}</strong></td><td><strong>{totalPercent}%</strong> <small className="muted">{total.done}/{total.tasks}</small></td></tr>
+    </Table>}
+  </Panel>;
+}
+
+function ResourceOverview({api}:{api:Api}) {
   const taskTab=new URLSearchParams(window.location.search).get('view')==='sprint-tasks';
   const [sprints,setSprints]=useState<Sprint[]>([]);
   const [sprintId,setSprintId]=useState(0);
@@ -41,7 +116,7 @@ export default function ResourceManagement({api}:{api:Api}) {
   const dialog=useRef<HTMLDialogElement>(null);
   const fileInput=useRef<HTMLInputElement>(null);
   const [importIntoCurrent,setImportIntoCurrent]=useState(false);
-  const [emailSettings,setEmailSettings]=useState<EmailSettings>({recipient:'kavaskar.docpanel@gmail.com',send_time:'09:00',enabled:false,mail_configured:false,last_sent_on:null,last_error:null});
+  const [emailSettings,setEmailSettings]=useState<EmailSettings>({recipient:'',send_time:'09:00',enabled:false,mail_configured:false,last_sent_on:null,last_error:null});
   const [emailLoading,setEmailLoading]=useState(true);
   const selected=sprints.find(s=>s.id===sprintId);
   const detailItem=items.find(item=>item.id===detailId);
@@ -132,9 +207,10 @@ export default function ResourceManagement({api}:{api:Api}) {
   return <div className="resource-page">
     {!taskTab&&<div className="resource-toolbar"><div><h2>Sprint testing tracker</h2><p>Plan testing work, track effort and review your team’s workload.</p></div><div className="resource-actions"><button className="secondary" disabled={busy} onClick={()=>setNewSprint(v=>!v)}><Plus size={15}/>New sprint</button><button disabled={!sprintId||busy||loading} onClick={startAdd}><Plus size={15}/>Add task</button></div></div>}
     {error&&!editor&&<p className="error" role="alert">{error}</p>}{message&&<p className="resource-message" role="status">{message}</p>}
-    {!taskTab&&<Panel title="Daily Resource Management email">
+    {!taskTab&&<BoardSummary/>}
+    {!taskTab&&<Panel title="Daily Resource Management email" className="resource-compact">
       {emailLoading?<p role="status">Loading email settings…</p>:<form className="resource-new-sprint" onSubmit={saveEmailSettings}>
-        <label>Recipient email<input type="email" required maxLength={320} value={emailSettings.recipient} onChange={event=>setEmailSettings(current=>({...current,recipient:event.target.value}))}/></label>
+        <label>Recipients<input type="text" required maxLength={2000} placeholder="name@company.com, another@company.com" value={emailSettings.recipient} onChange={event=>setEmailSettings(current=>({...current,recipient:event.target.value}))}/></label>
         <label>Send time (IST)<input type="time" required value={emailSettings.send_time} onChange={event=>setEmailSettings(current=>({...current,send_time:event.target.value}))}/></label>
         <label className="resource-checkbox"><input type="checkbox" checked={emailSettings.enabled} onChange={event=>setEmailSettings(current=>({...current,enabled:event.target.checked}))}/>Send daily summary</label>
         <div className="resource-actions"><button disabled={busy}>Save email schedule</button><button type="button" className="secondary" disabled={busy||!emailSettings.mail_configured} onClick={sendEmailNow}>Send summary now</button></div>
@@ -154,7 +230,7 @@ export default function ResourceManagement({api}:{api:Api}) {
         <div className="resource-summary-stat"><AlertCircle size={18}/><span>Unplanned effort</span><div className="resource-round-metrics"><RoundMetric value={totals.unplanned} label="Hours" tone="effort"/><RoundMetric value={totals.blocked} label="Blocked" tone="defects"/></div><small>Unplanned hours / blocked or impeded tasks</small></div>
         <div className="resource-summary-stat"><CheckCircle2 size={18}/><span>Test cases / defects</span><div className="resource-round-metrics"><RoundMetric value={totals.tests} label="Test cases"/><RoundMetric value={totals.defects} label="Defects" tone="defects"/></div><small>Recorded for this sprint</small></div>
       </div>
-      <Panel title="Team workload" className="resource-workload"><p className="resource-hint">Sprint totals by tester. The bar compares actual hours with estimated hours.</p><div className="resource-people">{people.map(person=><button key={person.name} className={`resource-person ${tester===person.name?'selected':''}`} onClick={()=>setTester(v=>v===person.name?'':person.name)} aria-pressed={tester===person.name}><div className="resource-person-heading"><span className="resource-avatar">{person.name.slice(0,2).toUpperCase()}</span><strong>{person.name}</strong><small>{person.done}/{person.tasks} done</small></div><div className="resource-hours"><span>{fmt(person.actual)}h actual</span><small>{fmt(person.estimated)}h estimated</small></div><div className={`resource-effort ${person.actual>person.estimated?'over':''}`}><span style={{width:`${Math.min(100,person.estimated?person.actual/person.estimated*100:person.actual?100:0)}%`}}/></div><small>{fmt(person.unplanned)}h unplanned{person.actual>person.estimated?` · ${fmt(person.actual-person.estimated)}h over estimate`:''}</small></button>)}</div>{!people.length&&<p>No assignments yet. Add a task to start tracking workload.</p>}</Panel>
+      <TeamPivot/>
 </>}
       {taskTab&&<section className="resource-tracker"><div className="resource-tracker-heading"><h3>{selected?.name??'Sprint'} · Task tracker</h3><a className="resource-back" href={overviewUrl.href}><ArrowLeft size={16}/>Back</a></div>
         <div className="resource-filters"><label>Search<input placeholder="Item, task, tester or comment" value={search} onChange={e=>setSearch(e.target.value)}/></label><label>Tester<select value={tester} onChange={e=>setTester(e.target.value)}><option value="">All testers</option>{Array.from(new Set(items.map(i=>i.tester||'Unassigned'))).sort().map(t=><option key={t}>{t}</option>)}</select></label>{[['status','Status',status,setStatus],['activity','Activity',activity,setActivity],['priority','Priority',priority,setPriority]].map(([key,label,value,setter])=><label key={String(key)}>{String(label)}<select value={value as string} onChange={e=>(setter as (v:string)=>void)(e.target.value)}><option value="">All {String(label).toLowerCase()}</option>{options(String(key)).map(v=><option key={v}>{v}</option>)}</select></label>)}<button className="secondary" onClick={()=>{setSearch('');setTester('');setStatus('');setActivity('');setPriority('');}}>Clear filters</button></div>
@@ -174,5 +250,36 @@ export default function ResourceManagement({api}:{api:Api}) {
       </form>
       {[['resource-testers',options('tester')],['resource-activities',options('activity',['RT','ATSD','ATSE','TCE','TCD','PBA','Prod Deploy'])],['resource-priorities',options('priority',['Low','Medium','High','Critical'])],['resource-statuses',options('status',['Not Started','In Progress','Blocked','Completed','Closed'])],['resource-flags',['Yes','No']]].map(([id,values])=><datalist key={id as string} id={id as string}>{(values as string[]).map(value=><option key={value} value={value}/>)}</datalist>)}
     </dialog>
+  </div>;
+}
+
+const resourceTabs=[['overview','Overview'],['scrum','Scrum'],['planning','Planning'],['spent-time','Spent Time']] as const;
+type ResourceTab=typeof resourceTabs[number][0];
+
+export default function ResourceManagement({api}:{api:Api}) {
+  const taskView=new URLSearchParams(window.location.search).get('view')==='sprint-tasks';
+  const initial=new URLSearchParams(window.location.search).get('tab');
+  const [statsSlot,setStatsSlot]=useState<HTMLElement|null>(null);
+  const [tab,setTab]=useState<ResourceTab>(resourceTabs.some(([id])=>id===initial)?initial as ResourceTab:'overview');
+  const choose=(next:ResourceTab)=>{
+    setTab(next);
+    const url=new URL(window.location.href);
+    if(next==='overview')url.searchParams.delete('tab');else url.searchParams.set('tab',next);
+    window.history.replaceState(null,'',url);
+  };
+  if(taskView)return <ResourceOverview api={api}/>;
+  return <div className="resource-tabbed">
+    <div className="resource-tabs-row">
+      <nav className="resource-tabs" role="tablist" aria-label="Resource Management sections">
+        {resourceTabs.map(([id,label])=><button key={id} role="tab" type="button" aria-selected={tab===id} className={`resource-tab${tab===id?' active':''}`} onClick={()=>choose(id)}>{label}</button>)}
+      </nav>
+      <div className="resource-tab-stats" ref={setStatsSlot}/>
+    </div>
+    <ScrumProvider page={tab} statsSlot={statsSlot}>
+      <div hidden={tab!=='overview'}><ResourceOverview api={api}/></div>
+      <div className="pm-root" hidden={tab!=='scrum'}><Scrum/></div>
+      <div className="pm-root" hidden={tab!=='planning'}><Planning/></div>
+      <div className="pm-root" hidden={tab!=='spent-time'}><SpentTime/></div>
+    </ScrumProvider>
   </div>;
 }

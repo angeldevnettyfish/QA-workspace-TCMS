@@ -55,8 +55,9 @@ RESOURCE_SMTP_PORT=587
 RESOURCE_SMTP_USERNAME=sender@gmail.com
 RESOURCE_SMTP_PASSWORD=your-gmail-app-password
 RESOURCE_SMTP_FROM=sender@gmail.com
-RESOURCE_REPORT_RECIPIENT=kavaskar.docpanel@gmail.com
 ```
+
+Recipients are not configured here: add them in the Resource Management Overview tab (Daily Resource Management email) and in the email popups.
 
 Never put the Gmail App Password in the browser or chat. Recreate the backend
 after updating `.env`. The scheduler runs in the backend process, uses Asia/Kolkata

@@ -1,8 +1,11 @@
 """Team-wide sprint planning, workload tracking and spreadsheet interchange."""
 import csv
 import html
+import base64
+import binascii
 import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -19,7 +22,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator, model_valida
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from .models import ResourceSprint, ResourceItem, ResourceImport, ResourceTimeEntry, ResourceEmailSettings
+from .models import ResourceSprint, ResourceItem, ResourceImport, ResourceTimeEntry, ResourceEmailSettings, ResourceScrumBoard
 
 HEADERS = ['Item ID','Start Date','Sprint Item / Task','Test Activity','Tester','Priority',
            'Est. Hrs','Actual Hrs','Completion %','End Date','Status','Impediment',
@@ -28,7 +31,6 @@ FIELDS = ['item_id','start_date','task','activity','tester','priority','estimate
           'actual_hours','completion_percent','end_date','status','impediment','release',
           'unplanned_hours','test_cases','defects','comment']
 Nonnegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
-RESOURCE_REPORT_RECIPIENT = 'kavaskar.docpanel@gmail.com'
 RESOURCE_REPORT_TIMEZONE = ZoneInfo('Asia/Kolkata')
 logger = logging.getLogger(__name__)
 
@@ -40,10 +42,41 @@ def resource_mail_configured():
     ))
 
 
+AUTH_FAILED = ('Gmail rejected the login. The app password in the backend .env '
+               '(RESOURCE_SMTP_PASSWORD) is invalid or was revoked: create a new Google App Password '
+               'for the sending account, paste it without spaces, and restart the backend.')
+
+
+def smtp_login(server, username, password):
+    """Gmail answers a bad app password with 535 and then often drops the connection."""
+    try:
+        server.login(username, password)
+    except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected):
+        raise RuntimeError(AUTH_FAILED) from None
+
+
+def mail_error_detail(exc):
+    """A message that says what is wrong, without leaking anything sensitive."""
+    if isinstance(exc, RuntimeError):
+        return str(exc)
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return ('Gmail rejected the login (535). The app password in the backend .env '
+                '(RESOURCE_SMTP_PASSWORD) is invalid or was revoked: create a new Google App Password '
+                'for the sending account, paste it without spaces, and restart the backend.')
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return 'Gmail refused one or more recipient addresses.'
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return 'Gmail refused the sender address; RESOURCE_SMTP_FROM must be the Gmail account that signs in.'
+    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected)) or (
+            isinstance(exc, OSError) and not isinstance(exc, smtplib.SMTPException)):
+        return 'Could not reach the Gmail SMTP server; check the network and RESOURCE_SMTP_HOST/PORT.'
+    return 'Gmail SMTP delivery failed; check backend logs.'
+
+
 def smtp_send(message):
     host = os.getenv('RESOURCE_SMTP_HOST', '').strip()
     username = os.getenv('RESOURCE_SMTP_USERNAME', '').strip()
-    password = os.getenv('RESOURCE_SMTP_PASSWORD', '')
+    password = os.getenv('RESOURCE_SMTP_PASSWORD', '').replace(' ', '')
     sender = os.getenv('RESOURCE_SMTP_FROM', '').strip()
     if not all((host, username, password, sender)):
         raise RuntimeError('Gmail SMTP is not configured on the backend')
@@ -56,14 +89,14 @@ def smtp_send(message):
     message['From'] = sender
     if port == 465:
         with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=30) as server:
-            server.login(username, password)
+            smtp_login(server, username, password)
             server.send_message(message)
     else:
         with smtplib.SMTP(host, port, timeout=30) as server:
             server.ehlo()
             server.starttls(context=ssl.create_default_context())
             server.ehlo()
-            server.login(username, password)
+            smtp_login(server, username, password)
             server.send_message(message)
 
 
@@ -180,7 +213,7 @@ def process_due_resource_email(session_factory, now_local=None):
         send_resource_digest(session_factory, recipient, local_day)
     except (OSError, smtplib.SMTPException, RuntimeError) as exc:
         logger.exception('Daily resource email delivery failed')
-        error = str(exc) if isinstance(exc, RuntimeError) else 'Gmail SMTP delivery failed; check backend logs.'
+        error = mail_error_detail(exc)
         with session_factory() as session:
             settings = session.get(ResourceEmailSettings, 1)
             if settings:
@@ -195,18 +228,66 @@ def process_due_resource_email(session_factory, now_local=None):
             session.commit()
 
 
+class ScrumBoardIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    people: list[dict] = Field(default_factory=list, max_length=500)
+    sprints: list[dict] = Field(default_factory=list, max_length=500)
+    settings: dict = Field(default_factory=dict)
+
+
+class InlineImageIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    cid: str = Field(pattern=r'^[A-Za-z0-9_-]{1,40}$')
+    data: str = Field(min_length=1, max_length=1_000_000)  # base64 PNG
+
+
+class SummaryEmailIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    to: list[str] = Field(min_length=1, max_length=50)
+    subject: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=100_000)
+    html: str = Field(default='', max_length=300_000)
+    images: list[InlineImageIn] = Field(default_factory=list, max_length=3)
+
+    @field_validator('to')
+    @classmethod
+    def validate_to(cls, values):
+        for value in values:
+            if not re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', value):
+                raise ValueError(f'Invalid recipient address: {value[:80]}')
+        return values
+
+    @field_validator('subject')
+    @classmethod
+    def validate_subject(cls, value):
+        if any(char in value for char in ('\n', '\r')):
+            raise ValueError('Subject must be a single line')
+        return value
+
+
 class ResourceEmailSettingsIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    recipient: str = Field(min_length=5, max_length=320)
+    recipient: str = Field(min_length=5, max_length=2000)
     send_time: str = Field(pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
     enabled: bool
 
     @field_validator('recipient')
     @classmethod
     def validate_recipient(cls, value):
-        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', value):
-            raise ValueError('Enter a valid recipient email address')
-        return value
+        # One or more addresses, separated by commas, semicolons or spaces.
+        found = []
+        for address in re.split(r'[\s,;]+', value):
+            if not address:
+                continue
+            if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', address):
+                raise ValueError(f'Enter valid recipient email addresses ({address[:60]} is not one)')
+            if address.lower() not in [a.lower() for a in found]:
+                found.append(address)
+        if not found:
+            raise ValueError('Enter at least one recipient email address')
+        if len(found) > 20:
+            raise ValueError('Use at most 20 recipients')
+        return ', '.join(found)
 
 
 def utc(value):
@@ -352,14 +433,60 @@ def create_resource_router(db, user, elevated, obj, data, audit):
 
     def email_settings_data(settings):
         return {
-            'recipient': settings.recipient if settings else os.getenv(
-                'RESOURCE_REPORT_RECIPIENT', RESOURCE_REPORT_RECIPIENT),
+            'recipient': settings.recipient if settings else '',
             'send_time': settings.send_time if settings else '09:00',
             'enabled': settings.enabled if settings else False,
             'mail_configured': resource_mail_configured(),
             'last_sent_on': settings.last_sent_on if settings else None,
             'last_error': settings.last_error if settings else None,
         }
+
+    @router.get('/scrum')
+    def get_scrum_board(s:Session=Depends(db), u=Depends(manager)):
+        row = s.get(ResourceScrumBoard, 1)
+        return row.data if row and row.data else {'people':[], 'sprints':[], 'settings':{}}
+
+    @router.put('/scrum')
+    def save_scrum_board(body:ScrumBoardIn, s:Session=Depends(db), u=Depends(manager)):
+        payload = body.model_dump()
+        if len(json.dumps(payload)) > 8_000_000:
+            raise HTTPException(413, 'Scrum board is too large')
+        row = s.get(ResourceScrumBoard, 1)
+        if row is None:
+            s.add(ResourceScrumBoard(id=1, data=payload))
+        else:
+            row.data = payload
+        s.commit()
+        return {'ok': True}
+
+    @router.post('/email/summary')
+    def send_summary_email(body:SummaryEmailIn, s:Session=Depends(db), u=Depends(manager)):
+        if not resource_mail_configured():
+            raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending email')
+        message = EmailMessage()
+        message['To'] = ', '.join(body.to)
+        message['Subject'] = body.subject
+        message.set_content(body.text)
+        if body.html:
+            message.add_alternative(body.html, subtype='html')
+            for image in body.images:
+                try:
+                    raw = base64.b64decode(image.data, validate=True)
+                except (binascii.Error, ValueError):
+                    raise HTTPException(400, 'An attached chart image is not valid base64') from None
+                if not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+                    raise HTTPException(400, 'Only PNG images can be attached')
+                message.get_payload()[1].add_related(
+                    raw, maintype='image', subtype='png', cid=f'<{image.cid}>', disposition='inline')
+        try:
+            smtp_send(message)
+        except (OSError, smtplib.SMTPException, RuntimeError) as exc:
+            logger.exception('Summary email delivery failed')
+            detail = mail_error_detail(exc)
+            raise HTTPException(502, detail[:500]) from None
+        audit(s,u.id,'send','resource_summary_email',1,after={'recipients':len(body.to),'subject':body.subject})
+        s.commit()
+        return {'sent':True,'recipients':len(body.to)}
 
     @router.get('/email-settings')
     def get_email_settings(s:Session=Depends(db), u=Depends(manager)):
@@ -386,8 +513,9 @@ def create_resource_router(db, user, elevated, obj, data, audit):
     @router.post('/email-settings/send-now')
     def send_email_now(s:Session=Depends(db), u=Depends(manager)):
         settings = s.get(ResourceEmailSettings, 1)
-        recipient = settings.recipient if settings else os.getenv(
-            'RESOURCE_REPORT_RECIPIENT', RESOURCE_REPORT_RECIPIENT)
+        recipient = settings.recipient if settings else ''
+        if not recipient:
+            raise HTTPException(400, 'Add a recipient and save the email schedule first')
         if not resource_mail_configured():
             raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending the summary')
         try:
@@ -395,7 +523,7 @@ def create_resource_router(db, user, elevated, obj, data, audit):
                 s, recipient, datetime.now(RESOURCE_REPORT_TIMEZONE).date()))
         except (OSError, smtplib.SMTPException, RuntimeError) as exc:
             logger.exception('Manual resource email delivery failed')
-            message = str(exc) if isinstance(exc, RuntimeError) else 'Gmail SMTP delivery failed; check backend logs.'
+            message = mail_error_detail(exc)
             raise HTTPException(502, message[:500]) from None
         audit(s,u.id,'send','resource_email_summary',1,after={'recipient':recipient})
         if settings:
