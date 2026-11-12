@@ -191,3 +191,11 @@ class ResourceEmailSettings(Base):
     last_sent_on = Column(Date)
     last_error = Column(Text)
     updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ResourceScrumBoard(Base):
+    """The single shared Scrum/Planning board (people, their tasks and sprints) kept as one JSON document."""
+    __tablename__ = 'resource_scrum_board'
+    id = Column(Integer, primary_key=True)
+    data = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
