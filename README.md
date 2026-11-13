@@ -1,34 +1,47 @@
 # Docpanel QA
 
-A self-hosted QA test management system for a small team. Stack: React/TypeScript, FastAPI, SQLAlchemy, PostgreSQL, Alembic, Docker Compose and Caddy.
+A self-hosted QA test management system for a small team. Stack: React/TypeScript, FastAPI, SQLAlchemy and PostgreSQL with Alembic migrations. The local development workflow connects directly to PostgreSQL on the host at `127.0.0.1:5432`; it does not need Docker.
 
-## Requirements
-- Windows 10/11 with Docker Desktop + WSL2, or Linux with Docker Engine and Compose V2.
-- Docker access to pull the PostgreSQL, Python, Node and Caddy images on first build.
+## Local quick start (PostgreSQL on this machine)
 
-## Quick start (Windows PowerShell)
-```powershell
-Copy-Item .env.example .env
-notepad .env
-# Replace the example DB_PASSWORD, JWT_SECRET and ADMIN_PASSWORD values.
-# Set COOKIE_SECURE=true only when HTTPS terminates in front of the app.
-docker compose up --build -d
-docker compose ps
-```
+Requirements: Python 3.12, Node 22+, and a local PostgreSQL 16 server. This workspace has a user-owned PostgreSQL cluster under `.local/` and a helper to start it.
 
-Open http://localhost:8080. Sign in with `ADMIN_EMAIL` and `ADMIN_PASSWORD` from `.env`. The backend applies its Alembic schema migration at startup. PostgreSQL and uploaded evidence persist in Docker volumes.
+1. Configure `.env` with the local PostgreSQL host, port, database, user and password. For this workspace use `DB_HOST=127.0.0.1` and `DB_PORT=5432`.
+2. Start the local PostgreSQL server:
+
+   ```sh
+   bash scripts/local_postgres.sh start
+   bash scripts/local_postgres.sh status
+   ```
+
+3. Start the backend from `backend/`:
+
+   ```sh
+   ../.venv/bin/python -m uvicorn app.main:app --env-file ../.env --host 127.0.0.1 --port 8002 --reload
+   ```
+
+4. In a second terminal, start the frontend from `frontend/`:
+
+   ```sh
+   npm install
+   npm run dev
+   ```
+
+Open http://localhost:8080. Sign in with `ADMIN_EMAIL` and `ADMIN_PASSWORD` from `.env`. The backend applies its Alembic schema migration at startup. PostgreSQL data stays in the local `.local/postgres` directory; uploaded evidence stays in the backend's local upload directory.
+
+The local PostgreSQL server is not configured to start automatically after reboot. Run `bash scripts/local_postgres.sh start` before starting the backend.
+
+## Optional Docker deployment
+
+`docker compose up --build -d` runs the complete app stack with its own PostgreSQL container and Docker volume. Use the local quick start above when the database must run on the host instead of in Docker.
 
 For the end-to-end project, test-case, plan, cycle, execution, and report workflow, see the [user manual](./USER-MANUAL.md).
 
 To trigger automation on a separate Bitbucket runner PC and receive JUnit reports here, see [Bitbucket automation setup](./docs/BITBUCKET-AUTOMATION.md).
 
-## Development without Docker
-Backend requires Python 3.12. From `backend/`, install `requirements-dev.txt` and run:
-```powershell
-uvicorn app.main:app --env-file ..\.env --host 0.0.0.0 --port 8002 --reload
-```
+## Database configuration
 
-Configure PostgreSQL in the root `.env` using `DB_HOST` (IP or hostname), `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Restart the backend after editing these values. The password is used as entered; URL encoding is handled automatically. Docker Compose uses the same database name, user, and password, with its internal `db` hostname and port 5432. These settings connect to an existing PostgreSQL database; they do not install a database or move existing data. Changing the Compose database name/user/password does not update an existing PostgreSQL volume.
+Configure PostgreSQL in the root `.env` using `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Restart the backend after editing these values. The password is used as entered; URL encoding is handled automatically. The local workflow uses these settings to connect directly to the host PostgreSQL server. Docker Compose overrides them to use its separate `db` container. These settings connect to an existing PostgreSQL database; they do not install a database or move existing data. Changing the Compose database name/user/password does not update an existing PostgreSQL volume.
 
 An optional `DATABASE_URL` overrides the separate fields for existing deployments. Leave it unset when using the separate fields. If neither `DATABASE_URL` nor `DB_HOST` is supplied, local development uses `sqlite:///./dev.db`. The initial administrator is seeded once from `.env`; changing the environment variable later does not change the existing account.
 
@@ -58,7 +71,7 @@ CONFIRM_RESTORE=YES scripts/restore.sh ./backups/qamanager-<timestamp>.sql ./bac
 Restore replaces the active PostgreSQL `public` schema and evidence volume. Verify `/api/health`, login, sample project/cycle history and evidence. Do not use `docker compose down -v` as a backup or restore method.
 
 ## Deployment and security
-Do not expose port 8080 over plain HTTP to the company network. Terminate TLS at a company-managed reverse proxy/VPN ingress, set `COOKIE_SECURE=true`, configure firewall allowlists, and keep PostgreSQL internal to Docker. Rotate secrets and restrict integration tokens to the intended project.
+Do not expose port 8080 over plain HTTP to the company network. Terminate TLS at a company-managed reverse proxy/VPN ingress, set `COOKIE_SECURE=true`, and configure firewall allowlists. If using the optional Docker deployment, keep its PostgreSQL service private and do not publish its port. Rotate secrets and restrict integration tokens to the intended project.
 
 Passwords use salted PBKDF2-HMAC-SHA256; browser sessions are HttpOnly cookies; API token values are shown once and only their hashes are stored. Evidence is limited to PNG/JPEG/WEBP/TXT/LOG and a configurable upload-size cap, and uses private storage keys.
 
