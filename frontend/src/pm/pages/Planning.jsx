@@ -1,6 +1,6 @@
 import React from 'react'
 import TabStats from '../components/TabStats'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ALL_SPRINTS,
   BACKLOG,
@@ -62,7 +62,7 @@ const h = (value) => (value ? String(Math.round(value * 100) / 100) : '')
  * foot. It is the same board as the Scrum tab — the state is shared — so an
  * estimate typed here shows up there and is saved the same way.
  */
-export default function Planning() {
+export default function Planning({ trackerView, sharedSprint = '', onSharedSprint }) {
   const { people, setPeople, sprints, view, setView, features, addTasks, store } = useScrum()
   const [adding, setAdding] = useState(false)
   const [openTaskId, setOpenTaskId] = useState(null)
@@ -83,7 +83,20 @@ export default function Planning() {
   // null means "not chosen yet" and resolves to the sprint running today;
   // ALL_SPRINTS is the explicit "every sprint", which is no filter at all.
   const sprintId = planSprintScope(sprints, view.planSprintId)
+  const nameOf = (id) => (id === ALL_SPRINTS || id === null ? 'All sprints' : id === BACKLOG ? 'Backlog' : sprints.map((s, i) => [s.id, sprintLabel(s, i)]).find(([sid]) => sid === id)?.[1] || '')
+  // Follow the sprint chosen on the Overview or RCA tab, and report this tab's own choice.
+  useEffect(() => {
+    if (!sharedSprint) return
+    const wanted = sharedSprint.toLowerCase()
+    const match = wanted === 'backlog' ? { id: BACKLOG } : wanted === 'all sprints' ? { id: ALL_SPRINTS } : sprints.find((s, i) => sprintLabel(s, i).toLowerCase() === wanted)
+    if (match && match.id !== sprintId) setView((v) => ({ ...v, planSprintId: match.id }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedSprint, sprints])
   const sprint = sprints.find((s) => s.id === sprintId) || null
+  // A sprint that came from the Overview tracker is shown as the tracker shows it.
+  const trackerSprint = Boolean(
+    trackerView && sprint && people.some((p) => p.tasks.some((t) => t.sprintId === sprint.id && t.trackerId))
+  )
   const sprintIndex = sprints.findIndex((s) => s.id === sprintId)
 
   const rows = useMemo(
@@ -244,12 +257,15 @@ export default function Planning() {
         <p className="warn">The QA backend is not reachable — changes are kept in this browser and will sync once it is running again.</p>
       )}
 
-      <section className="controls">
+      <section className="controls plan-controls">
         <label>
           🏃 Sprint
           <select
             value={sprintId === null ? ALL_SPRINTS : sprintId}
-            onChange={(e) => setView((v) => ({ ...v, planSprintId: e.target.value }))}
+            onChange={(e) => {
+              setView((v) => ({ ...v, planSprintId: e.target.value }))
+              onSharedSprint?.(nameOf(e.target.value))
+            }}
           >
             {sprints.map((s, i) => (
               <option key={s.id} value={s.id}>
@@ -314,7 +330,12 @@ export default function Planning() {
           </button>
         )}
         <div className="spacer" />
-        <button type="button" onClick={() => setAdding(true)} disabled={!people.length}>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          disabled={!people.length || trackerSprint}
+          title={trackerSprint ? 'Use Add task in the tracker table below for this sprint' : undefined}
+        >
           + Add task
         </button>
         <button
@@ -341,7 +362,9 @@ export default function Planning() {
         </span>
       </section>
 
-      {!rows.length ? (
+      {trackerSprint ? (
+        trackerView(sprint.name)
+      ) : !rows.length ? (
         <p className="empty">
           {sprints.length
             ? 'Nothing in this sprint yet — add tasks on the Scrum tab, or pick another sprint.'
@@ -603,7 +626,6 @@ export default function Planning() {
                   {totals.open} open · {totals.done} done
                 </td>
                 <td />
-                <td />
                 <td>{h(totals.estimate) || '—'}</td>
                 <td>{h(totals.spent) || '—'}</td>
                 <td />
@@ -631,7 +653,7 @@ export default function Planning() {
         />
       )}
 
-      {rows.length > 0 && (
+      {rows.length > 0 && !trackerSprint && (
         <section className="plan-pivot">
           <h2>
             Planned hours by {view.planGroupBy === 'status' ? 'status' : 'person'}

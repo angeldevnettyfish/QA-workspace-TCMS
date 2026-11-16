@@ -231,7 +231,7 @@ export function standupSummary({ people, sprintId = null, sprintName = '', day, 
     .map((person) => ({
       person,
       note: (person.log || []).find((n) => n.date === day)?.text?.trim() || '',
-      tasks: person.tasks.filter((t) => inScope(t) && t.status !== 'Done')
+      tasks: person.tasks.filter((t) => inScope(t) && (t.status === 'In Progress' || t.status === 'Blocked'))
     }))
     .filter((r) => r.note || r.tasks.length)
   const when = formatDay(day, { weekday: true })
@@ -242,8 +242,8 @@ export function standupSummary({ people, sprintId = null, sprintName = '', day, 
   let html = '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111827">'
   html += `<p>Hello everyone,</p><p>Here are the testers' notes for <b>${esc(when)}</b>${sprintName ? ` <span style="color:#6b7280">(${esc(sprintName)})</span>` : ''}:</p>`
   if (!rows.length) {
-    lines.push('No notes or open tasks.')
-    html += '<p style="color:#6b7280">No notes or open tasks.</p>'
+    lines.push('No notes or tasks in progress.')
+    html += '<p style="color:#6b7280">No notes or tasks in progress.</p>'
   }
   for (const { person, note, tasks } of rows) {
     lines.push(name(person))
@@ -261,7 +261,21 @@ export function standupSummary({ people, sprintId = null, sprintName = '', day, 
     }
     lines.push('')
   }
+  // Last: everything finished in the sprint, each with who did it.
+  const done = people.flatMap((person) => person.tasks.filter((t) => inScope(t) && t.status === 'Done').map((t) => ({ person, t })))
+  if (done.length) {
+    const label = sprintName ? ` in ${sprintName}` : ''
+    lines.push(`Done${label}`)
+    html += `<p style="margin:18px 0 2px"><b>Done${esc(label)}</b> <span style="color:#6b7280">(${done.length})</span></p><ul style="padding-left:20px;margin:4px 0">`
+    for (const { person, t } of done) {
+      const title = t.title.trim() || 'untitled'
+      lines.push(`  - ${title} (${name(person)})`)
+      html += `<li style="margin:2px 0">${esc(title)} <span style="color:#6b7280">(${esc(name(person))})</span></li>`
+    }
+    html += '</ul>'
+    lines.push('')
+  }
   lines.push('Thanks,', signature.trim() || '')
   html += `<p style="margin-top:16px">Thanks,<br/>${esc(signature.trim())}</p></div>`
-  return { subject, text: lines.join('\n').trim(), html, counts: { people: rows.length, notes: rows.filter((r) => r.note).length } }
+  return { subject, text: lines.join('\n').trim(), html, counts: { people: rows.length, notes: rows.filter((r) => r.note).length, done: done.length } }
 }

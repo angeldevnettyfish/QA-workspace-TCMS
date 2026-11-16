@@ -1,6 +1,8 @@
 import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent} from 'react';
 import {Plus, Upload, Download, Pencil, Archive, RotateCcw, Users, Clock, CheckCircle2, AlertCircle, ArrowLeft, List} from 'lucide-react';
 import {Panel, Table} from '../components/ui';
+import ResourceRoadmap from './ResourceRoadmap';
+import ResourceRca from './ResourceRca';
 import ResourceTaskDetails from './ResourceTaskDetails';
 import {ScrumProvider,useScrum} from '../pm/lib/scrumState';
 import {sprintLabel,spentHours,isCurrentSprint} from '../pm/lib/scrum';
@@ -94,8 +96,10 @@ function TeamPivot() {
   </Panel>;
 }
 
-function ResourceOverview({api}:{api:Api}) {
-  const taskTab=new URLSearchParams(window.location.search).get('view')==='sprint-tasks';
+// `embeddedSprint` shows this sprint's task tracker table inside another page (Planning), exactly as the tracker's own Tasks page does.
+function ResourceOverview({api,embeddedSprint,sharedSprint,onSharedSprint}:{api:Api;embeddedSprint?:string;sharedSprint?:string;onSharedSprint?:(name:string)=>void}) {
+  const embedded=embeddedSprint!==undefined;
+  const taskTab=embedded||new URLSearchParams(window.location.search).get('view')==='sprint-tasks';
   const [sprints,setSprints]=useState<Sprint[]>([]);
   const [sprintId,setSprintId]=useState(0);
   const [items,setItems]=useState<Item[]>([]);
@@ -122,15 +126,19 @@ function ResourceOverview({api}:{api:Api}) {
   const detailItem=items.find(item=>item.id===detailId);
   const loadSprints=useCallback(async()=>{const rows=await api('/resources/sprints') as Sprint[];setSprints(rows);return rows;},[api]);
   const loadItems=useCallback(async(id:number)=>{setItems(await api(`/resources/sprints/${id}/items?include_archived=true`));},[api]);
-  useEffect(()=>{let active=true;void api('/resources/sprints').then((rows:Sprint[])=>{if(active){setSprints(rows);const requested=Number(new URLSearchParams(window.location.search).get('sprint'));setSprintId(rows.some(row=>row.id===requested)?requested:rows[0]?.id??0);}}).catch(e=>{if(active)setError(String(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[api]);
+  useEffect(()=>{let active=true;void api('/resources/sprints').then((rows:Sprint[])=>{if(active){setSprints(rows);const requested=Number(new URLSearchParams(window.location.search).get('sprint'));const shared=rows.find(row=>row.name.toLowerCase()===String(sharedSprint||'').toLowerCase());const chosen=embedded?(rows.find(row=>row.name.toLowerCase()===String(embeddedSprint).toLowerCase())?.id??0):rows.some(row=>row.id===requested)?requested:shared?.id??rows[0]?.id??0;setSprintId(chosen);if(!embedded&&!shared){const row=rows.find(r=>r.id===chosen);if(row)onSharedSprint?.(row.name);}}}).catch(e=>{if(active)setError(String(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[api]);
+  // Another tab picked a sprint: follow it so every tab shows the same one.
+  useEffect(()=>{if(embedded||!sharedSprint)return;const match=sprints.find(row=>row.name.toLowerCase()===sharedSprint.toLowerCase());if(match)setSprintId(match.id);},[embedded,sharedSprint,sprints]);
+  // Planning picked another tracker sprint: show that one.
+  useEffect(()=>{if(!embedded)return;const match=sprints.find(row=>row.name.toLowerCase()===String(embeddedSprint).toLowerCase());if(match)setSprintId(match.id);},[embedded,embeddedSprint,sprints]);
   useEffect(()=>{let active=true;void api('/resources/email-settings').then((settings:EmailSettings)=>{if(active)setEmailSettings(settings);}).catch(e=>{if(active)setError(String(e));}).finally(()=>{if(active)setEmailLoading(false);});return()=>{active=false;};},[api]);
   useEffect(()=>{
-    if(!sprintId)return;
+    if(!sprintId||embedded)return;
     const url=new URL(window.location.href);url.searchParams.set('sprint',String(sprintId));window.history.replaceState(null,'',url);
     if(!taskTab)return;
     const previous=document.title;document.title=`${selected?.name??'Sprint'} · Tasks | Docpanel QA`;
     return()=>{document.title=previous;};
-  },[taskTab,sprintId,selected?.name]);
+  },[taskTab,sprintId,selected?.name,embedded]);
   useEffect(()=>{
     if(!sprintId)return;
     const refresh=()=>{void loadItems(sprintId).catch(e=>setError(String(e)));};
@@ -208,7 +216,7 @@ function ResourceOverview({api}:{api:Api}) {
     {!taskTab&&<div className="resource-toolbar"><div><h2>Sprint testing tracker</h2><p>Plan testing work, track effort and review your team’s workload.</p></div><div className="resource-actions"><button className="secondary" disabled={busy} onClick={()=>setNewSprint(v=>!v)}><Plus size={15}/>New sprint</button><button disabled={!sprintId||busy||loading} onClick={startAdd}><Plus size={15}/>Add task</button></div></div>}
     {error&&!editor&&<p className="error" role="alert">{error}</p>}{message&&<p className="resource-message" role="status">{message}</p>}
     {!taskTab&&<BoardSummary/>}
-    {!taskTab&&<Panel title="Daily Resource Management email" className="resource-compact">
+    {!taskTab&&<Panel title="Daily SprintBoard email" className="resource-compact">
       {emailLoading?<p role="status">Loading email settings…</p>:<form className="resource-new-sprint" onSubmit={saveEmailSettings}>
         <label>Recipients<input type="text" required maxLength={2000} placeholder="name@company.com, another@company.com" value={emailSettings.recipient} onChange={event=>setEmailSettings(current=>({...current,recipient:event.target.value}))}/></label>
         <label>Send time (IST)<input type="time" required value={emailSettings.send_time} onChange={event=>setEmailSettings(current=>({...current,send_time:event.target.value}))}/></label>
@@ -221,7 +229,7 @@ function ResourceOverview({api}:{api:Api}) {
       <p className="resource-hint">The summary includes active task details for all sprints, employee workload totals, and timesheets started that day.</p>
     </Panel>}
     {!taskTab&&newSprint&&<Panel title="New sprint"><form className="resource-new-sprint" onSubmit={e=>{e.preventDefault();void work(async()=>{const sprint=await api('/resources/sprints',{method:'POST',body:JSON.stringify({name:sprintName})});await loadSprints();setSprintId(sprint.id);setSprintName('');setNewSprint(false);setMessage('Sprint created.');});}}><label>Sprint name<input required maxLength={120} value={sprintName} onChange={e=>setSprintName(e.target.value)} placeholder="Sprint_11A"/></label><button disabled={busy}>Create sprint</button><button type="button" className="secondary" disabled={busy} onClick={()=>setNewSprint(false)}>Cancel</button></form></Panel>}
-    {!taskTab&&<><div className="resource-sprint-bar"><div className="resource-sprint-selection"><label>Sprint<select aria-label="Sprint" value={sprintId} disabled={loading||busy} onChange={e=>{setSprintId(Number(e.target.value));setMessage('');setError('');}}><option value={0} disabled>Select a sprint</option>{sprints.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{!taskTab&&(sprintId&&!loading?<a className="resource-open-tasks" href={taskUrl.href}><List size={16}/>Tasks</a>:<button disabled><List size={16}/>Tasks</button>)}</div><div className="resource-import"><label className="resource-checkbox"><input type="checkbox" checked={importIntoCurrent} disabled={!sprintId||busy} onChange={e=>setImportIntoCurrent(e.target.checked)}/>Import into selected sprint</label><div className="resource-actions"><button className="secondary" disabled={busy||loading} onClick={()=>fileInput.current?.click()}><Upload size={15}/>Import CSV</button><button className="secondary" disabled={!sprintId||busy||loading} onClick={exportFile}><Download size={15}/>Export CSV</button></div></div><input hidden ref={fileInput} type="file" accept=".csv,text/csv" onChange={e=>{const file=e.target.files?.[0];if(file)importFile(file);e.target.value='';}}/></div>
+    {!taskTab&&<><div className="resource-sprint-bar"><div className="resource-sprint-selection"><label>Sprint<select aria-label="Sprint" value={sprintId} disabled={loading||busy} onChange={e=>{const id=Number(e.target.value);setSprintId(id);const row=sprints.find(r=>r.id===id);if(row)onSharedSprint?.(row.name);setMessage('');setError('');}}><option value={0} disabled>Select a sprint</option>{sprints.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{!taskTab&&(sprintId&&!loading?<a className="resource-open-tasks" href={taskUrl.href}><List size={16}/>Tasks</a>:<button disabled><List size={16}/>Tasks</button>)}</div><div className="resource-import"><label className="resource-checkbox"><input type="checkbox" checked={importIntoCurrent} disabled={!sprintId||busy} onChange={e=>setImportIntoCurrent(e.target.checked)}/>Import into selected sprint</label><div className="resource-actions"><button className="secondary" disabled={busy||loading} onClick={()=>fileInput.current?.click()}><Upload size={15}/>Import CSV</button><button className="secondary" disabled={!sprintId||busy||loading} onClick={exportFile}><Download size={15}/>Export CSV</button></div></div><input hidden ref={fileInput} type="file" accept=".csv,text/csv" onChange={e=>{const file=e.target.files?.[0];if(file)importFile(file);e.target.value='';}}/></div>
     <p className="resource-hint">CSV imports append tasks and preserve repeated Item IDs. The same file can only be imported once per sprint. By default, the CSV title selects or creates the sprint.</p></>}
     {loading?<p role="status">Loading sprint tracker…</p>:!sprintId?<Panel title="Start tracking your team"><p>Create a sprint or import your Sprint Testing Tracker CSV to get started.</p></Panel>:<>
       {!taskTab&&<><div className="resource-stats">
@@ -232,7 +240,7 @@ function ResourceOverview({api}:{api:Api}) {
       </div>
       <TeamPivot/>
 </>}
-      {taskTab&&<section className="resource-tracker"><div className="resource-tracker-heading"><h3>{selected?.name??'Sprint'} · Task tracker</h3><a className="resource-back" href={overviewUrl.href}><ArrowLeft size={16}/>Back</a></div>
+      {taskTab&&<section className="resource-tracker"><div className="resource-tracker-heading"><h3>{selected?.name??'Sprint'} · Task tracker</h3>{embedded?<button disabled={busy||!sprintId} onClick={startAdd}><Plus size={16}/>Add task</button>:<a className="resource-back" href={overviewUrl.href}><ArrowLeft size={16}/>Back</a>}</div>
         <div className="resource-filters"><label>Search<input placeholder="Item, task, tester or comment" value={search} onChange={e=>setSearch(e.target.value)}/></label><label>Tester<select value={tester} onChange={e=>setTester(e.target.value)}><option value="">All testers</option>{Array.from(new Set(items.map(i=>i.tester||'Unassigned'))).sort().map(t=><option key={t}>{t}</option>)}</select></label>{[['status','Status',status,setStatus],['activity','Activity',activity,setActivity],['priority','Priority',priority,setPriority]].map(([key,label,value,setter])=><label key={String(key)}>{String(label)}<select value={value as string} onChange={e=>(setter as (v:string)=>void)(e.target.value)}><option value="">All {String(label).toLowerCase()}</option>{options(String(key)).map(v=><option key={v}>{v}</option>)}</select></label>)}<button className="secondary" onClick={()=>{setSearch('');setTester('');setStatus('');setActivity('');setPriority('');}}>Clear filters</button></div>
         <div className="resource-table-meta"><span>{visible.length} of {items.filter(i=>showArchived||!i.archived).length} tasks</span><label className="resource-checkbox"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/>Show archived</label></div>
         <Table headers={['Item / Task','Tester','Activity','Priority','Start date','End date','Est. hrs','Actual hrs','Completion %','Status','Impediment','Release','Unplanned hrs','Test cases','Defects','Comment','Actions']}>
@@ -241,25 +249,27 @@ function ResourceOverview({api}:{api:Api}) {
         <p className="resource-hint">Completion % is entered independently, as in your sheet; values above 100% are preserved. Test case and defect counts are tracker entries.</p>
       </section>}
     </>}
-    {detailItem&&<ResourceTaskDetails key={detailItem.id} item={detailItem} sprint={selected?.name??'Sprint'} api={api} onClose={()=>setDetailId(null)} onChanged={()=>loadItems(sprintId)} onEdit={()=>{setEditor({id:detailItem.id,draft:Object.fromEntries(fields.map(key=>[key,detailItem[key]==null?'':String(detailItem[key])]))});setDetailId(null);}}/>}
+    {detailItem&&<ResourceTaskDetails key={detailItem.id} item={detailItem} sprint={selected?.name??'Sprint'} api={api} members={Array.from(new Set(items.map(row=>row.tester).filter(Boolean))).sort() as string[]} onClose={()=>setDetailId(null)} onChanged={()=>loadItems(sprintId)}/>}
     <dialog ref={dialog} className="resource-editor" aria-labelledby="resource-editor-title" onCancel={event=>{if(busy)event.preventDefault();else setEditor(null);}}>
       <form onSubmit={saveItem}><div className="resource-editor-heading"><h2 id="resource-editor-title">{editor?.id?'Edit task':'Add task'}</h2><button type="button" className="secondary" disabled={busy} onClick={()=>setEditor(null)}>Close</button></div>
         {error&&editor&&<p className="error" role="alert">{error}</p>}
-        <fieldset disabled={busy}><div className="resource-form-grid">{input('item_id','Item ID')}{input('tester','Tester','text','resource-testers')}{input('activity','Test activity','text','resource-activities')}{input('priority','Priority','text','resource-priorities')}<label className="resource-form-wide">Sprint item / task<textarea required maxLength={10000} rows={3} value={editor?.draft.task??''} onChange={e=>setEditor(prev=>prev?{...prev,draft:{...prev.draft,task:e.target.value}}:null)}/></label>{input('start_date','Start date','date')}{input('end_date','End date','date')}{input('status','Status','text','resource-statuses')}{input('completion_percent','Completion %','number')}{input('estimated_hours','Estimated hours','number')}{input('actual_hours','Actual hours','number')}{input('unplanned_hours','Unplanned hours','number')}{input('test_cases','Test cases','number')}{input('defects','Defects','number')}{input('impediment','Impediment','text','resource-flags')}{input('release','Release','text','resource-flags')}<label className="resource-form-wide">Comment<textarea maxLength={20000} rows={4} value={editor?.draft.comment??''} onChange={e=>setEditor(prev=>prev?{...prev,draft:{...prev.draft,comment:e.target.value}}:null)}/></label></div></fieldset>
+        <fieldset disabled={busy}><div className="resource-form-grid">{input('item_id','Item ID')}{input('tester','Tester','text','resource-testers')}{input('activity','Test activity','text','resource-activities')}<label key="priority">Priority<select value={editor?.draft.priority||'Medium'} onChange={e=>setEditor(prev=>prev?{...prev,draft:{...prev.draft,priority:e.target.value}}:prev)}>{['Low','Medium','High'].concat(['Low','Medium','High'].includes(editor?.draft.priority??'')||!editor?.draft.priority?[]:[editor?.draft.priority??'']).map(v=><option key={v}>{v}</option>)}</select></label><label className="resource-form-wide">Sprint item / task<textarea required maxLength={10000} rows={3} value={editor?.draft.task??''} onChange={e=>setEditor(prev=>prev?{...prev,draft:{...prev.draft,task:e.target.value}}:null)}/></label>{input('start_date','Start date','date')}{input('end_date','End date','date')}{input('status','Status','text','resource-statuses')}{input('completion_percent','Completion %','number')}{input('estimated_hours','Estimated hours','number')}{input('actual_hours','Actual hours','number')}{input('unplanned_hours','Unplanned hours','number')}{input('test_cases','Test cases','number')}{input('defects','Defects','number')}{input('impediment','Impediment','text','resource-flags')}{input('release','Release','text','resource-flags')}<label className="resource-form-wide">Comment<textarea maxLength={20000} rows={4} value={editor?.draft.comment??''} onChange={e=>setEditor(prev=>prev?{...prev,draft:{...prev.draft,comment:e.target.value}}:null)}/></label></div></fieldset>
         <div className="resource-editor-footer"><span>Completion % is saved exactly as entered.</span><button type="button" className="secondary" disabled={busy} onClick={()=>setEditor(null)}>Cancel</button><button disabled={busy}>{busy?'Saving…':'Save task'}</button></div>
       </form>
-      {[['resource-testers',options('tester')],['resource-activities',options('activity',['RT','ATSD','ATSE','TCE','TCD','PBA','Prod Deploy'])],['resource-priorities',options('priority',['Low','Medium','High','Critical'])],['resource-statuses',options('status',['Not Started','In Progress','Blocked','Completed','Closed'])],['resource-flags',['Yes','No']]].map(([id,values])=><datalist key={id as string} id={id as string}>{(values as string[]).map(value=><option key={value} value={value}/>)}</datalist>)}
+      {[['resource-testers',options('tester')],['resource-activities',options('activity',['RT','ATSD','ATSE','TCE','TCD','PBA','Prod Deploy'])],['resource-priorities',options('priority',['Low','Medium','High'])],['resource-statuses',options('status',['Not Started','In Progress','Blocked','Completed','Closed'])],['resource-flags',['Yes','No']]].map(([id,values])=><datalist key={id as string} id={id as string}>{(values as string[]).map(value=><option key={value} value={value}/>)}</datalist>)}
     </dialog>
   </div>;
 }
 
-const resourceTabs=[['overview','Overview'],['scrum','Scrum'],['planning','Planning'],['spent-time','Spent Time']] as const;
+const resourceTabs=[['overview','Overview'],['roadmap','Roadmap'],['scrum','Scrum'],['planning','Planning'],['spent-time','Spent Time'],['rca','RCA']] as const;
 type ResourceTab=typeof resourceTabs[number][0];
 
 export default function ResourceManagement({api}:{api:Api}) {
   const taskView=new URLSearchParams(window.location.search).get('view')==='sprint-tasks';
   const initial=new URLSearchParams(window.location.search).get('tab');
   const [statsSlot,setStatsSlot]=useState<HTMLElement|null>(null);
+  // One sprint choice for the Overview, Planning and RCA tabs.
+  const [sharedSprint,setSharedSprint]=useState('');
   const [tab,setTab]=useState<ResourceTab>(resourceTabs.some(([id])=>id===initial)?initial as ResourceTab:'overview');
   const choose=(next:ResourceTab)=>{
     setTab(next);
@@ -270,16 +280,18 @@ export default function ResourceManagement({api}:{api:Api}) {
   if(taskView)return <ResourceOverview api={api}/>;
   return <div className="resource-tabbed">
     <div className="resource-tabs-row">
-      <nav className="resource-tabs" role="tablist" aria-label="Resource Management sections">
+      <nav className="resource-tabs" role="tablist" aria-label="SprintBoard sections">
         {resourceTabs.map(([id,label])=><button key={id} role="tab" type="button" aria-selected={tab===id} className={`resource-tab${tab===id?' active':''}`} onClick={()=>choose(id)}>{label}</button>)}
       </nav>
       <div className="resource-tab-stats" ref={setStatsSlot}/>
     </div>
     <ScrumProvider page={tab} statsSlot={statsSlot}>
-      <div hidden={tab!=='overview'}><ResourceOverview api={api}/></div>
+      <div hidden={tab!=='overview'}><ResourceOverview api={api} sharedSprint={sharedSprint} onSharedSprint={setSharedSprint}/></div>
+      <div hidden={tab!=='roadmap'}><ResourceRoadmap api={api}/></div>
       <div className="pm-root" hidden={tab!=='scrum'}><Scrum/></div>
-      <div className="pm-root" hidden={tab!=='planning'}><Planning/></div>
+      <div className="pm-root" hidden={tab!=='planning'}><Planning sharedSprint={sharedSprint} onSharedSprint={setSharedSprint} trackerView={(name:string)=><ResourceOverview api={api} embeddedSprint={name}/>}/></div>
       <div className="pm-root" hidden={tab!=='spent-time'}><SpentTime/></div>
+      <div hidden={tab!=='rca'}><ResourceRca api={api} sharedSprint={sharedSprint} onSharedSprint={setSharedSprint}/></div>
     </ScrumProvider>
   </div>;
 }

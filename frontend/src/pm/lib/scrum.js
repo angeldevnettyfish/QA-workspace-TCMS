@@ -59,6 +59,10 @@ export const blankTask = () => ({
   testCases: 0,
   automatedCases: 0,
   testedAt: '',
+  // Set when the task was brought over from the Overview sprint tracker.
+  trackerId: '',
+  // Fingerprint of the shared fields at the last tracker sync.
+  trackerBase: '',
   // Stretches of work: { id, start, end, note }. An entry with no end is
   // running now.
   entries: []
@@ -134,6 +138,8 @@ export const normalizeTask = (t) => ({
   testCases: Math.max(0, Math.floor(Number(t?.testCases) || 0)),
   automatedCases: Math.max(0, Math.floor(Number(t?.automatedCases) || 0)),
   testedAt: typeof t?.testedAt === 'string' ? t.testedAt : '',
+  trackerId: typeof t?.trackerId === 'string' ? t.trackerId : '',
+  trackerBase: typeof t?.trackerBase === 'string' ? t.trackerBase : '',
   entries: Array.isArray(t?.entries) ? t.entries.filter(Boolean).map(normalizeEntry) : []
 })
 

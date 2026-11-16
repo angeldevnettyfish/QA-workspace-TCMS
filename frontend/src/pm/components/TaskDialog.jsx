@@ -233,12 +233,7 @@ export default function TaskDialog({ taskId, onClose }) {
                     ))}
                   </tbody>
                 </table>
-              ) : (
-                <label className="td-manual">
-                  No time entries yet — or type the total spent so far:
-                  <input type="number" min="0" step="0.25" value={task.spent || ''} placeholder="hours" onChange={(e) => update({ spent: hours(e.target.value) })} />
-                </label>
-              )}
+              ) : null}
             </section>
             )}
 

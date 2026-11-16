@@ -235,6 +235,16 @@ class ScrumBoardIn(BaseModel):
     settings: dict = Field(default_factory=dict)
 
 
+class RoadmapIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    features: list[dict] = Field(default_factory=list, max_length=2000)
+
+
+class RcaIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    entries: list[dict] = Field(default_factory=list, max_length=5000)
+
+
 class InlineImageIn(BaseModel):
     model_config = ConfigDict(extra='forbid')
     cid: str = Field(pattern=r'^[A-Za-z0-9_-]{1,40}$')
@@ -459,6 +469,42 @@ def create_resource_router(db, user, elevated, obj, data, audit):
         s.commit()
         return {'ok': True}
 
+    @router.get('/roadmap')
+    def get_roadmap(s:Session=Depends(db), u=Depends(manager)):
+        row = s.get(ResourceScrumBoard, 2)
+        return row.data if row and row.data else {'features':[]}
+
+    @router.put('/roadmap')
+    def save_roadmap(body:RoadmapIn, s:Session=Depends(db), u=Depends(manager)):
+        payload = body.model_dump()
+        if len(json.dumps(payload)) > 4_000_000:
+            raise HTTPException(413, 'Roadmap is too large')
+        row = s.get(ResourceScrumBoard, 2)
+        if row is None:
+            s.add(ResourceScrumBoard(id=2, data=payload))
+        else:
+            row.data = payload
+        s.commit()
+        return {'ok': True}
+
+    @router.get('/rca')
+    def get_rca(s:Session=Depends(db), u=Depends(manager)):
+        row = s.get(ResourceScrumBoard, 3)
+        return row.data if row and row.data else {'entries':[]}
+
+    @router.put('/rca')
+    def save_rca(body:RcaIn, s:Session=Depends(db), u=Depends(manager)):
+        payload = body.model_dump()
+        if len(json.dumps(payload)) > 4_000_000:
+            raise HTTPException(413, 'RCA list is too large')
+        row = s.get(ResourceScrumBoard, 3)
+        if row is None:
+            s.add(ResourceScrumBoard(id=3, data=payload))
+        else:
+            row.data = payload
+        s.commit()
+        return {'ok': True}
+
     @router.post('/email/summary')
     def send_summary_email(body:SummaryEmailIn, s:Session=Depends(db), u=Depends(manager)):
         if not resource_mail_configured():
@@ -547,6 +593,22 @@ def create_resource_router(db, user, elevated, obj, data, audit):
         item.actual_hours = (item.actual_hours or 0)+(body.end_at-body.start_at).total_seconds()/3600
         s.flush()
         audit(s,u.id,'create','resource_time_entry',entry.id,after=entry_data(entry))
+        s.commit()
+        return entry_data(entry)
+
+    @router.put('/items/{item_id}/timesheets/{entry_id}')
+    def edit_time(item_id:int, entry_id:int, body:TimeEntryIn, s:Session=Depends(db), u=Depends(manager)):
+        item = locked_item(s,item_id)
+        entry = obj(s,ResourceTimeEntry,entry_id)
+        if entry.item_id != item_id:
+            raise HTTPException(404, 'Timesheet not found')
+        if entry.end_at is None:
+            raise HTTPException(409, 'Stop the timer before editing it')
+        before = entry_data(entry)
+        old_hours = (utc(entry.end_at)-utc(entry.start_at)).total_seconds()/3600
+        entry.member, entry.start_at, entry.end_at, entry.note = body.member, body.start_at, body.end_at, body.note
+        item.actual_hours = max(0,(item.actual_hours or 0)-old_hours+(body.end_at-body.start_at).total_seconds()/3600)
+        audit(s,u.id,'update','resource_time_entry',entry.id,before=before,after=entry_data(entry))
         s.commit()
         return entry_data(entry)
 

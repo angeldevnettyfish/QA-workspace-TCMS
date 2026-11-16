@@ -1,5 +1,5 @@
 import React from 'react'
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   BACKLOG,
   blankPerson,
@@ -10,6 +10,7 @@ import {
   touchTask
 } from './scrum'
 import { initScrum, persistScrum } from './scrumStore'
+import { fetchTracker, pushItem, reconcileTracker } from './trackerSync'
 
 const ScrumContext = createContext(null)
 const NO_FEATURES = []
@@ -76,6 +77,46 @@ export function ScrumProvider({ page, session = null, statsSlot, children }) {
     setStore((s) => ({ ...s, online: loaded.online, error: loaded.error || '' }))
     return loaded.online
   }, [])
+
+  // The latest board, readable from the async sync below without re-running it on every edit.
+  const latest = useRef({ people, sprints })
+  latest.current = { people, sprints }
+
+  /**
+   * Keeps the Overview tracker and the board showing the same work: tracker
+   * tasks are added to the board, and edits made on either side reach the other
+   * (see trackerSync.js). Does nothing when the tracker can't be read.
+   */
+  const syncing = useRef(false)
+  const syncTracker = useCallback(async () => {
+    if (syncing.current) return
+    syncing.current = true
+    try {
+      const { trackerSprints, itemsBySprint } = await fetchTracker()
+      const plan = reconcileTracker(latest.current.people, latest.current.sprints, trackerSprints, itemsBySprint)
+      await Promise.all(plan.pushes.map((push) => pushItem(push.itemId, push.body).catch(() => {})))
+      if (plan.changed) {
+        setSprints(plan.sprints)
+        setPeople(plan.people)
+      }
+    } catch {
+      /* the tracker is optional */
+    } finally {
+      syncing.current = false
+    }
+  }, [])
+
+  const boardTab = page === 'scrum' || page === 'planning' || page === 'spent-time'
+  useEffect(() => {
+    if (!store.loading && boardTab) syncTracker()
+  }, [store.loading, boardTab, syncTracker])
+
+  // After an edit on the board, send it to the tracker a moment later.
+  useEffect(() => {
+    if (store.loading || !boardTab) return undefined
+    const timer = setTimeout(syncTracker, 1500)
+    return () => clearTimeout(timer)
+  }, [people, store.loading, boardTab, syncTracker])
 
   // Save on the same short debounce as the roadmap: names are typed a letter
   // at a time.

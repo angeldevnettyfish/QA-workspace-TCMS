@@ -3401,3 +3401,36 @@
 .pm-root .sprint-detail .sprint-meta { flex-direction: row; align-items: center; gap: 14px; }
 .pm-root .sprint-detail .sprint-progress { flex: none; }
 .pm-root .sprint-detail .sprint-progress .bar { width: 90px; }
+
+/* the embedded task tracker table (Planning) keeps the tracker's own look, not the board's button styles */
+.pm-root .resource-tracker button.resource-task-link { display: block; width: 100%; height: auto; padding: 0; margin: 0; background: transparent; border: 0; box-shadow: none; color: var(--text, #e7edf2); font: inherit; font-size: 12px; font-weight: 600; text-align: left; white-space: normal; transform: none; }
+.pm-root .resource-tracker button.resource-task-link:hover { color: var(--text, #e7edf2); box-shadow: none; }
+.pm-root .resource-tracker .resource-task-cell { font-size: 12px; }
+
+/* Planning toolbar: every control shares one baseline and a 36px control height */
+.pm-root .plan-controls { flex-wrap: nowrap; align-items: flex-end; gap: 12px; }
+.pm-root .plan-controls > label, .pm-root .plan-controls .status-filter { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 12px; font-weight: 500; line-height: 16px; color: var(--muted); }
+.pm-root .plan-controls .filter-caption { line-height: 16px; font-weight: 500; font-size: 12px; margin: 0; }
+.pm-root .plan-controls select { height: 36px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; margin: 0; }
+.pm-root .plan-controls .chips { display: flex; align-items: center; gap: 6px; height: 36px; }
+.pm-root .plan-controls .chip { height: 32px; margin: 0; }
+.pm-root .plan-controls > label.check { flex-direction: row; align-items: center; height: 36px; gap: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; }
+.pm-root .plan-controls > label.check input { margin: 0; width: auto; }
+.pm-root .plan-controls > button { height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; margin: 0; white-space: nowrap; }
+.pm-root .plan-controls .plan-scope { display: flex; align-items: center; height: 36px; white-space: nowrap; font-size: 12px; margin: 0; }
+@media (max-width: 1100px) { .pm-root .plan-controls { flex-wrap: wrap; } }
+
+/* Planning task table: every row, header and footer cell shares one vertical centre and the number columns line up */
+.pm-root table.plan-table th, .pm-root table.plan-table td { vertical-align: middle; }
+.pm-root table.plan-table thead th { padding: 8px 8px; }
+.pm-root table.plan-table thead th button.sort-head { justify-content: flex-start; padding-left: 0; }
+.pm-root table.plan-table th:nth-child(6), .pm-root table.plan-table td:nth-child(6),
+.pm-root table.plan-table th:nth-child(7), .pm-root table.plan-table td:nth-child(7),
+.pm-root table.plan-table th:nth-child(9), .pm-root table.plan-table td:nth-child(9) { text-align: center; }
+.pm-root table.plan-table thead th:nth-child(6) button.sort-head,
+.pm-root table.plan-table thead th:nth-child(7) button.sort-head,
+.pm-root table.plan-table thead th:nth-child(9) button.sort-head { justify-content: center; padding-left: 6px; }
+.pm-root table.plan-table td .cell-input.hours { margin: 0 auto; text-align: center; }
+.pm-root table.plan-table td select.task-select { height: 36px; margin: 0; }
+.pm-root table.plan-table tbody td, .pm-root table.plan-table tbody th { height: 52px; }
+.pm-root table.plan-table td.row-actions { vertical-align: middle; }
