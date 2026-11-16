@@ -9,6 +9,7 @@ import {
   byStatus,
   daysLeft,
   defaultSprintId,
+  entryHours,
   hours,
   isCurrentSprint,
   editScope,
@@ -66,6 +67,9 @@ export default function Planning() {
   const { people, setPeople, sprints, view, setView, features, addTasks, store } = useScrum()
   const [adding, setAdding] = useState(false)
   const [openTaskId, setOpenTaskId] = useState(null)
+  const [editingSpentTaskId, setEditingSpentTaskId] = useState('')
+  const [spentDraft, setSpentDraft] = useState('')
+  const [spentEditError, setSpentEditError] = useState('')
   const [mailing, setMailing] = useState(false)
   // Sorting is a way of reading the table, not a setting: it starts off, and a
   // third click on a column puts the board's own order back.
@@ -133,6 +137,53 @@ export default function Planning() {
           : p
       )
     )
+
+  const editSpent = (task) => {
+    setEditingSpentTaskId(task.id)
+    setSpentDraft(String(spentHours(task)))
+    setSpentEditError('')
+  }
+
+  const cancelSpentEdit = () => {
+    setEditingSpentTaskId('')
+    setSpentDraft('')
+    setSpentEditError('')
+  }
+
+  const saveSpentEdit = (person, task) => {
+    const target = spentDraft.trim() ? Number(spentDraft.replace(',', '.')) : 0
+    if (!Number.isFinite(target) || target < 0) {
+      setSpentEditError('Enter a valid number of hours.')
+      return
+    }
+
+    const now = Date.now()
+    const entries = (task.entries || []).filter((entry) => !entry.deletedAt && Number.isFinite(Date.parse(entry.start)))
+    const latest = [...entries].sort((a, b) => Date.parse(a.start) - Date.parse(b.start)).at(-1)
+    if (!latest || !Number.isFinite(Date.parse(latest.start))) {
+      setSpentEditError('This time entry has no valid start time.')
+      return
+    }
+
+    const otherHours = entries
+      .filter((entry) => entry.id !== latest.id)
+      .reduce((total, entry) => total + entryHours(entry, now), 0)
+    const latestHours = Math.round((target - otherHours) * 100) / 100
+    if (latestHours < 0) {
+      setSpentEditError(`The total cannot be less than the other entries (${otherHours.toFixed(2)} h).`)
+      return
+    }
+
+    const updatedAt = new Date(now).toISOString()
+    const durationMs = latestHours * 3600000
+    const change = latest.end
+      ? { end: new Date(Date.parse(latest.start) + durationMs).toISOString(), updatedAt }
+      : { start: new Date(now - durationMs).toISOString(), updatedAt }
+    updateTask(person.id, task.id, {
+      entries: task.entries.map((entry) => entry.id === latest.id ? { ...entry, ...change } : entry)
+    })
+    cancelSpentEdit()
+  }
 
   /** Reassigning here is the same move the board makes by drag and drop. */
   const reassign = (taskId, toPersonId) => setPeople((list) => moveTask(list, taskId, toPersonId))
@@ -424,6 +475,7 @@ export default function Planning() {
                   { key: 'sprint', label: '🏃 Sprint', left: true },
                   { key: 'estimate', label: 'Est. h' },
                   { key: 'spent', label: 'Spent h' },
+                  { key: 'unplanned', label: 'Unplanned h' },
                   { key: 'result', label: 'Result', left: true },
                   { key: 'issues', label: 'Issues' },
                   { key: '', label: '' }
@@ -464,6 +516,7 @@ export default function Planning() {
             </thead>
             <tbody>
               {sorted.map(({ person, task }) => {
+                const trackedEntries = (task.entries || []).filter((entry) => !entry.deletedAt)
                 return (
                   <tr key={task.id} className={picked.has(task.id) ? 'picked' : undefined}>
                     <td className="pick-col">
@@ -537,14 +590,40 @@ export default function Planning() {
                       />
                     </td>
                     <td>
-                      {task.entries.length ? (
-                        <span
-                          className="tracked"
-                          title={`${task.entries.length} time entr${task.entries.length === 1 ? 'y' : 'ies'} on the board — start and stop the clock there`}
-                        >
-                          {spentHours(task)}
-                          <small>⏱</small>
-                        </span>
+                      {trackedEntries.length ? (
+                        editingSpentTaskId === task.id ? (
+                          <div className="tracked-edit">
+                            <input
+                              autoFocus
+                              className="cell-input hours"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={spentDraft}
+                              title="This adjusts the latest time entry; earlier entries stay unchanged."
+                              aria-label={`Edit spent hours for ${task.title || 'task'}`}
+                              onChange={(e) => setSpentDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveSpentEdit(person, task)
+                                if (e.key === 'Escape') cancelSpentEdit()
+                              }}
+                            />
+                            <button type="button" className="small primary" title="Save spent hours" onClick={() => saveSpentEdit(person, task)}>✓</button>
+                            <button type="button" className="small" title="Cancel edit" onClick={cancelSpentEdit}>✕</button>
+                            {spentEditError && <span className="tracked-edit-error" role="alert">{spentEditError}</span>}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="tracked tracked-button"
+                            title="Click to edit spent hours; this adjusts the latest time entry"
+                            aria-label={`Edit spent time for ${task.title || 'task'}`}
+                            onClick={() => editSpent(task)}
+                          >
+                            {spentHours(task)}
+                            <small>✎</small>
+                          </button>
+                        )
                       ) : (
                         <input
                           className="cell-input hours"
@@ -556,6 +635,18 @@ export default function Planning() {
                           onChange={(e) => updateTask(person.id, task.id, { spent: hours(e.target.value) })}
                         />
                       )}
+                    </td>
+                    <td>
+                      <input
+                        className="cell-input hours"
+                        type="number"
+                        min="0"
+                        step="0.25"
+                        value={task.unplannedHours || ''}
+                        placeholder="0"
+                        title="Hours spent outside the sprint plan"
+                        onChange={(e) => updateTask(person.id, task.id, { unplannedHours: hours(e.target.value) })}
+                      />
                     </td>
                     <td className="left">
                       <span className={`pill result-${task.testResult.toLowerCase().replace(/\s+/g, '-')}`}>{task.testResult}</span>
@@ -606,6 +697,7 @@ export default function Planning() {
                 <td />
                 <td>{h(totals.estimate) || '—'}</td>
                 <td>{h(totals.spent) || '—'}</td>
+                <td>{h(totals.unplanned) || '—'}</td>
                 <td />
                 <td>{totals.issues || ''}</td>
                 <td />

@@ -2862,7 +2862,7 @@
 .pm-root .time-entry{
 
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) 54px auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px minmax(0, 1.2fr) 54px auto;
   gap: 6px;
   align-items: center;
 
@@ -2877,6 +2877,7 @@
   font-size: 12px;
 
 }
+.pm-root .time-entry .entry-member { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-root .entry-hours{
 
   text-align: right;
@@ -2922,6 +2923,13 @@
 .pm-root .tracked small{
  font-size: 11px; opacity: .7; 
 }
+.pm-root .tracked-button { padding: 0 6px 0 0; border: 0; background: transparent; font: inherit; text-align: right; cursor: pointer; }
+.pm-root .tracked-button:hover { text-decoration: underline; }
+.pm-root .tracked-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.pm-root .tracked-edit { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 130px; }
+.pm-root .tracked-edit input { width: 72px; }
+.pm-root .tracked-edit button.small { padding: 3px 6px; }
+.pm-root .tracked-edit-error { flex-basis: 100%; color: var(--bad); font-size: 11px; }
 .pm-root .fix-panel{
  display: flex; flex-direction: column; gap: 8px; 
 }
@@ -3150,11 +3158,12 @@
 .pm-root .td-grid label, .pm-root .td-log label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
 .pm-root .td-grid .wide { grid-column: 1 / -1; }
 .pm-root .td-grid input, .pm-root .td-grid select, .pm-root .td-grid textarea,
-.pm-root .td-log input, .pm-root .td-entries input { width: 100%; font: inherit; color: var(--ink); }
+.pm-root .td-log input, .pm-root .td-log select, .pm-root .td-entries input, .pm-root .td-entries select { width: 100%; font: inherit; color: var(--ink); }
 .pm-root .td-grid textarea { resize: vertical; }
 .pm-root .td-log { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 12px; }
 .pm-root .td-log .grow { flex: 1 1 180px; }
 .pm-root .td-entries { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pm-root .td-entries-wrap { max-width: 100%; overflow-x: auto; }
 .pm-root .td-entries th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; }
 .pm-root .td-entries td { padding: 3px 6px; }
 .pm-root .td-manual { display: flex; gap: 10px; align-items: center; color: var(--muted); }
@@ -3175,12 +3184,17 @@
 .pm-root .td-section h3 small { margin-left: 0; }
 .pm-root .td-entries { table-layout: fixed; }
 .pm-root .td-entries th, .pm-root .td-entries td { vertical-align: middle; text-align: left; }
-.pm-root .td-entries th:nth-child(1), .pm-root .td-entries th:nth-child(2) { width: 24%; }
-.pm-root .td-entries th:nth-child(3) { width: 70px; }
-.pm-root .td-entries th:nth-child(5) { width: 54px; }
-.pm-root .td-entries td:nth-child(3) { font-variant-numeric: tabular-nums; }
-.pm-root .td-entries td:nth-child(5) { text-align: right; }
+.pm-root .td-entries { min-width: 780px; }
+.pm-root .td-entries th:nth-child(1), .pm-root .td-entries th:nth-child(2) { width: 21%; }
+.pm-root .td-entries th:nth-child(3) { width: 100px; }
+.pm-root .td-entries th:nth-child(4) { width: 62px; }
+.pm-root .td-entries th:nth-child(6) { width: 172px; }
+.pm-root .td-entries td:nth-child(4) { font-variant-numeric: tabular-nums; }
+.pm-root .td-entries td:nth-child(6) { text-align: right; }
 .pm-root .td-entries input { height: 40px; }
+.pm-root .td-entry-actions { white-space: nowrap; }
+.pm-root .td-entry-actions button + button { margin-left: 4px; }
+.pm-root .td-edit-error { margin: 8px 0 0; color: var(--bad); font-size: 12px; }
 .pm-root .td-log > button { height: 40px; }
 .pm-root .td-log input { height: 40px; }
 .pm-root .td-grid input, .pm-root .td-grid select { height: 40px; }
@@ -3233,6 +3247,8 @@
 .pm-root .task-dialog .td-side { align-self: stretch; }
 .pm-root .task-dialog .td-toolbar { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; }
 .pm-root .task-dialog .td-main > * { margin: 0; }
+.pm-root .td-time-member { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.pm-root .td-time-member select { height: 40px; max-width: 160px; color: var(--ink); }
 
 .pm-root .td-time-toggle.on { border-color: var(--accent); color: var(--accent); }
 .pm-root .task-dialog .td-time { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(0, 0, 0, .12); }
@@ -3374,6 +3390,14 @@
 .pm-root .mail-preview { flex: 1; min-height: 240px; max-height: none; }
 .pm-root .mail-dialog .mail-foot, .pm-root .mail-dialog .modal-foot { padding: 8px 20px; }
 @media (max-width: 800px) { .pm-root .mail-row { flex-wrap: wrap; } .pm-root .mail-row label, .pm-root .mail-row .mail-subject-inline { flex: 1 1 200px; } }
+.pm-root .task-email-backdrop { z-index: 30; }
+.pm-root .task-email-dialog { width: min(760px, 94vw); height: auto; max-height: 90vh; margin: auto; border-radius: var(--r-lg); box-shadow: var(--shadow-lg); }
+.pm-root .task-email-form { display: grid; gap: 12px; padding: 16px 20px; overflow-y: auto; }
+.pm-root .task-email-form label { display: grid; gap: 5px; margin: 0; color: var(--muted); font-size: 12.5px; }
+.pm-root .task-email-form input, .pm-root .task-email-form textarea { width: 100%; color: var(--ink); font: inherit; }
+.pm-root .task-email-form input { height: 38px; }
+.pm-root .task-email-form textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
+.pm-root .task-email-dialog .modal-foot { justify-content: flex-end; padding: 10px 20px; }
 
 /* summary cards inside the tab bar: compact */
 .pm-root.tab-stats { background: none; }

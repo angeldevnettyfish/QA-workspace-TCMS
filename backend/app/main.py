@@ -1,5 +1,4 @@
-import os, hmac, hashlib, secrets, io, csv, json, re, logging, time, asyncio, hashlib as _hashlib, xml.etree.ElementTree as ET
-from contextlib import suppress
+import os, hmac, hashlib, secrets, io, csv, json, re, logging, time, hashlib as _hashlib, xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -17,7 +16,7 @@ from .models import Base, now, User, Project, Membership, TestFolder, TestCase, 
 from .dashboard import create_dashboard_router
 from .test_cases import create_test_cases_router
 from .bitbucket import create_bitbucket_router
-from .resources import create_resource_router, process_due_resource_email
+from .resources import create_resource_router
 
 from .config import database_url
 
@@ -175,20 +174,7 @@ async def lifespan(app):
             if not pw or len(pw)<12: raise RuntimeError('Set ADMIN_PASSWORD with at least 12 characters')
             s.add(User(email=email,name='Administrator',password_hash=password_hash(pw),role='admin',roles=['admin'])); s.commit()
     os.makedirs(UPLOAD_DIR,exist_ok=True)
-    async def resource_email_worker():
-        while True:
-            try:
-                await asyncio.to_thread(process_due_resource_email, SessionLocal)
-            except Exception:
-                logger.exception('Daily resource email scheduler failed')
-            await asyncio.sleep(30)
-    worker = asyncio.create_task(resource_email_worker())
-    try:
-        yield
-    finally:
-        worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await worker
+    yield
 app=FastAPI(title='Docpanel QA API',lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv('CORS_ORIGINS','http://localhost:5173,http://localhost:8080').split(',')],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 logger=logging.getLogger('qa_manager')

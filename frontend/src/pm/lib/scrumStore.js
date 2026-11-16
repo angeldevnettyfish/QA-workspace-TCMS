@@ -32,6 +32,10 @@ async function getFromServer() {
   return { ...asBoard(body), view: normalizeScrumView(body.settings?.scrum) }
 }
 
+export async function refreshScrumBoard() {
+  return getFromServer()
+}
+
 async function putToServer(people, sprints, view) {
   const res = await withTimeout((signal) =>
     fetch(URL, {

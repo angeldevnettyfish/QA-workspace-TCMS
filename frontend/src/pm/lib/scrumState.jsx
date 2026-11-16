@@ -9,10 +9,48 @@ import {
   todayISO,
   touchTask
 } from './scrum'
-import { initScrum, persistScrum } from './scrumStore'
+import { initScrum, persistScrum, refreshScrumBoard } from './scrumStore'
 
 const ScrumContext = createContext(null)
 const NO_FEATURES = []
+
+function mergeTimeEntries(localPeople, remotePeople) {
+  const remoteTasks = new Map()
+  remotePeople.forEach((person) => person.tasks.forEach((task) => remoteTasks.set(task.id, task)))
+  let peopleChanged = false
+  const nextPeople = localPeople.map((person) => {
+    let personChanged = false
+    const tasks = person.tasks.map((task) => {
+      const remote = remoteTasks.get(task.id)
+      if (!remote) return task
+      const entries = new Map(task.entries.map((entry) => [entry.id, entry]))
+      remote.entries.forEach((entry) => {
+        const local = entries.get(entry.id)
+        if (!local) {
+          entries.set(entry.id, entry)
+          return
+        }
+        const localVersion = local.updatedAt || local.start || ''
+        const remoteVersion = entry.updatedAt || entry.start || ''
+        const merged = remoteVersion >= localVersion ? { ...local, ...entry } : { ...entry, ...local }
+        const ends = [local.end, entry.end].filter(Boolean)
+        const deletions = [local.deletedAt, entry.deletedAt].filter(Boolean)
+        if (remoteVersion === localVersion && ends.length) merged.end = ends.sort().at(-1)
+        merged.memberId = merged.memberId || local.memberId || entry.memberId
+        if (deletions.length) merged.deletedAt = deletions.sort().at(-1)
+        entries.set(entry.id, JSON.stringify(merged) === JSON.stringify(local) ? local : merged)
+      })
+      const next = [...entries.values()]
+      if (next.length === task.entries.length && next.every((entry, index) => entry === task.entries[index])) return task
+      personChanged = true
+      return { ...task, entries: next }
+    })
+    if (!personChanged) return person
+    peopleChanged = true
+    return { ...person, tasks }
+  })
+  return peopleChanged ? nextPeople : localPeople
+}
 
 /**
  * One copy of the scrum board for every view of it. The board and the planning
@@ -87,6 +125,26 @@ export function ScrumProvider({ page, session = null, statsSlot, children }) {
     }, 400)
     return () => clearTimeout(timer)
   }, [people, sprints, view, store.loading])
+
+  // Time entries can be added by two people to the same shared task. Poll and
+  // merge just those append-only records without replacing local task edits.
+  useEffect(() => {
+    if (store.loading || !store.online) return undefined
+    let active = true
+    const sync = async () => {
+      try {
+        const remote = await refreshScrumBoard()
+        if (active) setPeople((current) => mergeTimeEntries(current, remote.people))
+      } catch {
+        // The ordinary save path reports connection state; polling stays quiet.
+      }
+    }
+    const interval = setInterval(sync, 5000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [store.loading, store.online])
 
   /**
    * A card for somebody who may sign in. The board and the sign-in list are one

@@ -244,14 +244,38 @@ class InlineImageIn(BaseModel):
 class SummaryEmailIn(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     to: list[str] = Field(min_length=1, max_length=50)
+    cc: list[str] = Field(default_factory=list, max_length=50)
     subject: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=100_000)
     html: str = Field(default='', max_length=300_000)
     images: list[InlineImageIn] = Field(default_factory=list, max_length=3)
 
-    @field_validator('to')
+    @field_validator('to', 'cc')
     @classmethod
-    def validate_to(cls, values):
+    def validate_recipients(cls, values):
+        for value in values:
+            if not re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', value):
+                raise ValueError(f'Invalid recipient address: {value[:80]}')
+        return values
+
+    @field_validator('subject')
+    @classmethod
+    def validate_subject(cls, value):
+        if any(char in value for char in ('\n', '\r')):
+            raise ValueError('Subject must be a single line')
+        return value
+
+
+class TaskEmailIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    to: list[str] = Field(min_length=1, max_length=50)
+    cc: list[str] = Field(default_factory=list, max_length=50)
+    subject: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=100_000)
+
+    @field_validator('to', 'cc')
+    @classmethod
+    def validate_addresses(cls, values):
         for value in values:
             if not re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', value):
                 raise ValueError(f'Invalid recipient address: {value[:80]}')
@@ -292,6 +316,52 @@ class ResourceEmailSettingsIn(BaseModel):
 
 def utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def merge_scrum_time_entries(existing, incoming):
+    """Keep independent team time entries when clients save the shared board concurrently."""
+    if not isinstance(existing, dict) or not isinstance(incoming, dict):
+        return incoming
+    previous = {}
+    for person in existing.get('people', []):
+        for task in person.get('tasks', []):
+            if task.get('id'):
+                previous[str(task['id'])] = task.get('entries', [])
+    for person in incoming.get('people', []):
+        for task in person.get('tasks', []):
+            old_entries = previous.get(str(task.get('id')), [])
+            if not old_entries:
+                continue
+            ordered = {}
+            for entry in old_entries:
+                if entry.get('id'):
+                    ordered[str(entry['id'])] = dict(entry)
+            for entry in task.get('entries', []):
+                entry_id = str(entry.get('id') or '')
+                if not entry_id or entry_id not in ordered:
+                    if entry_id:
+                        ordered[entry_id] = dict(entry)
+                    continue
+                old = ordered[entry_id]
+                old_version = old.get('updatedAt') or old.get('start') or ''
+                new_version = entry.get('updatedAt') or entry.get('start') or ''
+                if new_version > old_version:
+                    merged = {**old, **entry}
+                elif old_version > new_version:
+                    merged = {**entry, **old}
+                else:
+                    merged = {**old, **entry}
+                    # Legacy rows have no edit version; a stale save must not reopen them.
+                    ends = [value for value in (old.get('end'), entry.get('end')) if value]
+                    if ends:
+                        merged['end'] = max(ends)
+                # Retain explicit deletions so stale browser saves cannot restore entries.
+                deletions = [value for value in (old.get('deletedAt'), entry.get('deletedAt')) if value]
+                if deletions:
+                    merged['deletedAt'] = max(deletions)
+                ordered[entry_id] = merged
+            task['entries'] = list(ordered.values())
+    return incoming
 
 
 class TimeEntryIn(BaseModel):
@@ -451,10 +521,11 @@ def create_resource_router(db, user, elevated, obj, data, audit):
         payload = body.model_dump()
         if len(json.dumps(payload)) > 8_000_000:
             raise HTTPException(413, 'Scrum board is too large')
-        row = s.get(ResourceScrumBoard, 1)
+        row = s.scalar(select(ResourceScrumBoard).where(ResourceScrumBoard.id==1).with_for_update())
         if row is None:
             s.add(ResourceScrumBoard(id=1, data=payload))
         else:
+            payload = merge_scrum_time_entries(row.data, payload)
             row.data = payload
         s.commit()
         return {'ok': True}
@@ -465,6 +536,8 @@ def create_resource_router(db, user, elevated, obj, data, audit):
             raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending email')
         message = EmailMessage()
         message['To'] = ', '.join(body.to)
+        if body.cc:
+            message['Cc'] = ', '.join(body.cc)
         message['Subject'] = body.subject
         message.set_content(body.text)
         if body.html:
@@ -484,9 +557,46 @@ def create_resource_router(db, user, elevated, obj, data, audit):
             logger.exception('Summary email delivery failed')
             detail = mail_error_detail(exc)
             raise HTTPException(502, detail[:500]) from None
-        audit(s,u.id,'send','resource_summary_email',1,after={'recipients':len(body.to),'subject':body.subject})
+        audit(s,u.id,'send','resource_summary_email',1,after={'recipients':len(body.to)+len(body.cc),'to':len(body.to),'cc':len(body.cc),'subject':body.subject})
         s.commit()
         return {'sent':True,'recipients':len(body.to)}
+
+    @router.post('/email/task')
+    def send_task_email(body:TaskEmailIn, s:Session=Depends(db), u=Depends(manager)):
+        if not resource_mail_configured():
+            raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending email')
+        to_addresses = []
+        seen_to = set()
+        for address in body.to:
+            key = address.casefold()
+            if key not in seen_to:
+                seen_to.add(key)
+                to_addresses.append(address)
+        cc_addresses = []
+        seen_cc = set(seen_to)
+        for address in body.cc:
+            key = address.casefold()
+            if key not in seen_cc:
+                seen_cc.add(key)
+                cc_addresses.append(address)
+        message = EmailMessage()
+        message['To'] = ', '.join(to_addresses)
+        if cc_addresses:
+            message['Cc'] = ', '.join(cc_addresses)
+        message['Subject'] = body.subject
+        message.set_content(body.text)
+        try:
+            smtp_send(message)
+        except (OSError, smtplib.SMTPException, RuntimeError) as exc:
+            logger.exception('Task email delivery failed')
+            detail = mail_error_detail(exc)
+            raise HTTPException(502, detail[:500]) from None
+        audit(s,u.id,'send','resource_task_email',1,after={
+            'to_recipients':len(to_addresses), 'cc_recipients':len(cc_addresses),
+            'subject':body.subject,
+        })
+        s.commit()
+        return {'sent':True,'to':len(to_addresses),'cc':len(cc_addresses)}
 
     @router.get('/email-settings')
     def get_email_settings(s:Session=Depends(db), u=Depends(manager)):

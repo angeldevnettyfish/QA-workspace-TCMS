@@ -45,6 +45,8 @@ export const blankTask = () => ({
   notesAt: '',
   // Planning numbers, in hours; 0 means "not estimated yet".
   estimate: 0,
+  // Hours spent outside the sprint plan; surfaced in Resource Management.
+  unplannedHours: 0,
   // Typed by hand. Once a task has time entries they are what counts, and this
   // is left alone rather than quietly overwritten.
   spent: 0,
@@ -65,14 +67,17 @@ export const blankTask = () => ({
 })
 
 /** One stretch of work on a task. An open end means the clock is running. */
-export const blankEntry = () => ({ id: '', start: '', end: '', note: '' })
+export const blankEntry = () => ({ id: '', memberId: '', start: '', end: '', note: '', deletedAt: '', updatedAt: '' })
 
 export const normalizeEntry = (e) => ({
   ...blankEntry(),
   id: e?.id || newId('en'),
+  memberId: typeof e?.memberId === 'string' ? e.memberId : '',
   start: typeof e?.start === 'string' ? e.start : '',
   end: typeof e?.end === 'string' ? e.end : '',
-  note: String(e?.note ?? '')
+  note: String(e?.note ?? ''),
+  deletedAt: typeof e?.deletedAt === 'string' ? e.deletedAt : '',
+  updatedAt: typeof e?.updatedAt === 'string' ? e.updatedAt : ''
 })
 export const blankPerson = () => ({ id: '', name: '', email: '', role: '', tasks: [], log: [] })
 export const blankNote = () => ({ id: '', date: '', text: '' })
@@ -125,6 +130,7 @@ export const normalizeTask = (t) => ({
   updatedAt: typeof t?.updatedAt === 'string' ? t.updatedAt : '',
   notesAt: typeof t?.notesAt === 'string' ? t.notesAt : '',
   estimate: hours(t?.estimate),
+  unplannedHours: hours(t?.unplannedHours),
   spent: hours(t?.spent),
   testResult: TEST_RESULTS.includes(t?.testResult) ? t.testResult : 'Not Run',
   testDetails: String(t?.testDetails ?? ''),
@@ -163,9 +169,12 @@ export function elapsedLabel(entry, now = Date.now()) {
 }
 
 /** The entry still running on a task, if any. */
-export const runningEntry = (task) => (task?.entries || []).find((e) => e.start && !e.end) || null
+export const activeTimeEntries = (task) => (task?.entries || []).filter((entry) => !entry.deletedAt)
 
-export const isRunning = (task) => Boolean(runningEntry(task))
+export const runningEntry = (task, memberId = '') =>
+  activeTimeEntries(task).find((e) => e.start && !e.end && (!memberId || e.memberId === memberId)) || null
+
+export const isRunning = (task, memberId = '') => Boolean(runningEntry(task, memberId))
 
 /** Hours between two stamps, to the minute; an open entry runs up to `now`. */
 export function entryHours(entry, now = Date.now()) {
@@ -178,7 +187,7 @@ export function entryHours(entry, now = Date.now()) {
 
 /** What the timer has logged against a task, running entry included. */
 export function trackedHours(task, now = Date.now()) {
-  const total = (task?.entries || []).reduce((n, entry) => n + entryHours(entry, now), 0)
+  const total = activeTimeEntries(task).reduce((n, entry) => n + entryHours(entry, now), 0)
   return Math.round(total * 100) / 100
 }
 
@@ -187,22 +196,26 @@ export function trackedHours(task, now = Date.now()) {
  * are any; the typed figure is what a task without them has to go on.
  */
 export function spentHours(task, now = Date.now()) {
-  return task?.entries?.length ? trackedHours(task, now) : hours(task?.spent)
+  return activeTimeEntries(task).length ? trackedHours(task, now) : hours(task?.spent)
 }
 
 /** Starts the clock, closing anything already running on the same task. */
-export function startTimer(task, at = new Date().toISOString()) {
-  const entries = (task.entries || []).map((e) => (e.start && !e.end ? { ...e, end: at } : e))
+export function startTimer(task, at = new Date().toISOString(), memberId = '') {
+  const entries = (task.entries || []).map((e) =>
+    !e.deletedAt && e.start && !e.end && (!memberId || e.memberId === memberId) ? { ...e, end: at, updatedAt: at } : e
+  )
   return touchTask(task, {
-    entries: [...entries, { ...blankEntry(), id: newId('en'), start: at }]
+    entries: [...entries, { ...blankEntry(), id: newId('en'), memberId, start: at, updatedAt: at }]
   })
 }
 
 /** Stops it. A task that was not running comes back untouched. */
-export function stopTimer(task, at = new Date().toISOString()) {
-  if (!isRunning(task)) return task
+export function stopTimer(task, at = new Date().toISOString(), memberId = '') {
+  if (!isRunning(task, memberId)) return task
   return touchTask(task, {
-    entries: task.entries.map((e) => (e.start && !e.end ? { ...e, end: at } : e))
+    entries: task.entries.map((e) =>
+      !e.deletedAt && e.start && !e.end && (!memberId || e.memberId === memberId) ? { ...e, end: at, updatedAt: at } : e
+    )
   })
 }
 
@@ -211,16 +224,35 @@ export function stopTimer(task, at = new Date().toISOString()) {
  * clocks going at once for the same person is a mistake, not a feature.
  */
 export function startTaskFor(people, personId, taskId, at = new Date().toISOString()) {
-  return people.map((person) => {
-    if (person.id !== personId) return person
-    return {
+  let keptTaskTimer = false
+  return people.map((person) => ({
       ...person,
       tasks: person.tasks.map((task) => {
-        if (task.id === taskId) return startTimer(task, at)
-        return isRunning(task) ? stopTimer(task, at) : task
+        let taskChanged = false
+        let entries = task.entries.map((entry) => {
+          if (entry.deletedAt || entry.memberId !== personId || !entry.start || entry.end) return entry
+          if (task.id === taskId && !keptTaskTimer) {
+            keptTaskTimer = true
+            return entry
+          }
+          taskChanged = true
+          return { ...entry, end: at, updatedAt: at }
+        })
+        if (task.id === taskId && !keptTaskTimer) {
+          keptTaskTimer = true
+          taskChanged = true
+          entries = [...entries, { ...blankEntry(), id: newId('en'), memberId: personId, start: at, updatedAt: at }]
+        }
+        return taskChanged ? touchTask(task, { entries }) : task
       })
-    }
-  })
+    }))
+}
+
+export function stopTaskFor(people, personId, taskId, at = new Date().toISOString()) {
+  return people.map((person) => ({
+    ...person,
+    tasks: person.tasks.map((task) => task.id === taskId ? stopTimer(task, at, personId) : task)
+  }))
 }
 
 /** Stamps a task as just edited, and its notes too when those are what changed. */
@@ -254,16 +286,26 @@ export const normalizeNote = (n) => ({
   text: String(n?.text ?? '')
 })
 
-export const normalizePerson = (p) => ({
-  ...blankPerson(),
-  id: p?.id || newId('pp'),
-  name: String(p?.name ?? ''),
-  // What ties a card to whoever signed in; the name is the fallback.
-  email: String(p?.email ?? '').trim().toLowerCase(),
-  role: String(p?.role ?? ''),
-  tasks: Array.isArray(p?.tasks) ? p.tasks.filter(Boolean).map(normalizeTask) : [],
-  log: Array.isArray(p?.log) ? p.log.filter(Boolean).map(normalizeNote) : []
-})
+export const normalizePerson = (p) => {
+  const id = p?.id || newId('pp')
+  return {
+    ...blankPerson(),
+    id,
+    name: String(p?.name ?? ''),
+    // What ties a card to whoever signed in; the name is the fallback.
+    email: String(p?.email ?? '').trim().toLowerCase(),
+    role: String(p?.role ?? ''),
+    tasks: Array.isArray(p?.tasks) ? p.tasks.filter(Boolean).map((raw) => {
+      const task = normalizeTask(raw)
+      return {
+        ...task,
+        // Existing task entries belonged to the task's assignee.
+        entries: task.entries.map((entry) => ({ ...entry, memberId: entry.memberId || id }))
+      }
+    }) : [],
+    log: Array.isArray(p?.log) ? p.log.filter(Boolean).map(normalizeNote) : []
+  }
+}
 
 export const normalizeSprint = (s) => ({
   ...blankSprint(),
@@ -700,7 +742,7 @@ export function planningRows(people, sprintId = null, { hideDone = false, person
 
 /** Estimated against spent for a set of rows, with the counts that frame it. */
 export function timeTotals(rows = [], now = Date.now()) {
-  const totals = { tasks: rows.length, open: 0, done: 0, estimate: 0, spent: 0, estimated: 0, issues: 0 }
+  const totals = { tasks: rows.length, open: 0, done: 0, estimate: 0, spent: 0, unplanned: 0, estimated: 0, issues: 0 }
   for (const { task } of rows) {
     if (isOpen(task)) totals.open += 1
     else totals.done += 1
@@ -708,9 +750,11 @@ export function timeTotals(rows = [], now = Date.now()) {
     totals.estimate += task.estimate
     totals.issues += task.issues || 0
     totals.spent += spentHours(task, now)
+    totals.unplanned += task.unplannedHours || 0
   }
   totals.estimate = Math.round(totals.estimate * 100) / 100
   totals.spent = Math.round(totals.spent * 100) / 100
+  totals.unplanned = Math.round(totals.unplanned * 100) / 100
   // Positive means it took longer than planned.
   totals.diff = Math.round((totals.spent - totals.estimate) * 100) / 100
   return totals
@@ -743,7 +787,7 @@ export const byPerson = ({ person }) => ({
 export const byStatus = ({ task }) => ({ key: task.status, label: task.status })
 
 /** The columns the planning table can be sorted by. */
-export const PLAN_SORTS = ['person', 'task', 'status', 'sprint', 'roadmap', 'estimate', 'spent', 'result', 'issues']
+export const PLAN_SORTS = ['person', 'task', 'status', 'sprint', 'roadmap', 'estimate', 'spent', 'unplanned', 'result', 'issues']
 
 /**
  * Sorts the planning table by one column. Status sorts by where it sits in the
@@ -770,6 +814,8 @@ export function sortPlanningRows(rows, key, dir = 'asc', { sprintOf, featureOf }
         return text(featureOf ? featureOf(row.task.featureId) : row.task.featureId)
       case 'estimate':
         return row.task.estimate
+      case 'unplanned':
+        return row.task.unplannedHours
       case 'result':
         return TEST_RESULTS.indexOf(row.task.testResult)
       case 'issues':

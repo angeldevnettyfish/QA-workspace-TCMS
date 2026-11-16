@@ -1,9 +1,11 @@
 import React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import TaskEmailDialog from './TaskEmailDialog'
 import {
   SCRUM_STATUSES,
   TEST_RESULTS,
   BACKLOG,
+  activeTimeEntries,
   blankEntry,
   entryHours,
   fromLocalInput,
@@ -14,7 +16,7 @@ import {
   sprintLabel,
   spentHours,
   startTaskFor,
-  stopTimer,
+  stopTaskFor,
   toLocalInput,
   todayISO,
   touchTask
@@ -27,6 +29,7 @@ const formatClock = (h) => {
   const total = Math.round((h || 0) * 60)
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
+const timeStamp = (value) => value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—'
 
 /**
  * One task opened full-size, laid out like a ticket: a wide area on the left for
@@ -48,16 +51,22 @@ export default function TaskDialog({ taskId, onClose }) {
   const [logStart, setLogStart] = useState('09:00')
   const [logEnd, setLogEnd] = useState('')
   const [logNote, setLogNote] = useState('')
+  const [timeMemberId, setTimeMemberId] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const [showTime, setShowTime] = useState(false)
+  const [emailOpen, setEmailOpen] = useState(false)
+  const [editingEntryId, setEditingEntryId] = useState('')
+  const [entryDraft, setEntryDraft] = useState(null)
+  const [entryEditError, setEntryEditError] = useState('')
 
   useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose()
+    const onKey = (e) => e.key === 'Escape' && !emailOpen && onClose()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [emailOpen, onClose])
 
-  const running = found ? isRunning(found.task) : false
+  const activeMemberId = found && people.some((p) => p.id === timeMemberId) ? timeMemberId : found?.person.id || ''
+  const running = found ? isRunning(found.task, activeMemberId) : false
   useEffect(() => {
     if (!running) return undefined
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -66,6 +75,7 @@ export default function TaskDialog({ taskId, onClose }) {
 
   if (!found) return null
   const { person, task } = found
+  const timeEntries = activeTimeEntries(task)
 
   const update = (patch) =>
     setPeople((list) =>
@@ -78,7 +88,35 @@ export default function TaskDialog({ taskId, onClose }) {
   const updateTesting = (patch) => update({ ...patch, testedAt: new Date().toISOString() })
   const setEntries = (entries) => update({ entries })
   const patchEntry = (id, patch) =>
-    setEntries(task.entries.map((e) => (e.id === id ? { ...e, ...patch } : e)))
+    setEntries(task.entries.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e)))
+
+  const editEntry = (entry) => {
+    setEditingEntryId(entry.id)
+    setEntryDraft({ start: toLocalInput(entry.start), end: toLocalInput(entry.end), note: entry.note || '' })
+    setEntryEditError('')
+  }
+  const saveEntryEdit = (entry) => {
+    const start = fromLocalInput(entryDraft?.start)
+    const end = fromLocalInput(entryDraft?.end)
+    if (!start) return setEntryEditError('Enter a valid start time.')
+    if (entry.end && !end) return setEntryEditError('Use Resume to start a new timer.')
+    if (end && new Date(end) <= new Date(start)) return setEntryEditError('End time must be after start time.')
+    patchEntry(entry.id, { start, end, note: entryDraft.note })
+    setEditingEntryId('')
+    setEntryDraft(null)
+    setEntryEditError('')
+  }
+  const cancelEntryEdit = () => {
+    setEditingEntryId('')
+    setEntryDraft(null)
+    setEntryEditError('')
+  }
+  const resumeEntry = (entry) => {
+    const memberId = entry.memberId || person.id
+    setTimeMemberId(memberId)
+    setPeople((list) => startTaskFor(list, memberId, task.id))
+  }
+  const stopEntry = (entry) => setPeople((list) => stopTaskFor(list, entry.memberId || person.id, task.id))
 
   const logStartAt = logDate && logStart ? new Date(`${logDate}T${logStart}:00`) : null
   const logEndAt = logDate && logEnd ? new Date(`${logDate}T${logEnd}:00`) : null
@@ -89,7 +127,7 @@ export default function TaskDialog({ taskId, onClose }) {
     if (!logValid) return
     setEntries([
       ...task.entries,
-      { ...blankEntry(), id: newId('en'), start: logStartAt.toISOString(), end: logEndAt.toISOString(), note: logNote.trim() }
+      { ...blankEntry(), id: newId('en'), memberId: activeMemberId, start: logStartAt.toISOString(), end: logEndAt.toISOString(), note: logNote.trim(), updatedAt: new Date().toISOString() }
     ])
     // The next stretch usually starts where this one ended.
     setLogStart(logEnd)
@@ -97,14 +135,7 @@ export default function TaskDialog({ taskId, onClose }) {
     setLogNote('')
   }
 
-  const stop = () =>
-    setPeople((list) =>
-      list.map((p) =>
-        p.id === person.id
-          ? { ...p, tasks: p.tasks.map((t) => (t.id === task.id ? stopTimer(t) : t)) }
-          : p
-      )
-    )
+  const stop = () => setPeople((list) => stopTaskFor(list, activeMemberId, task.id))
 
   const spent = spentHours(task, now)
   const diff = task.estimate ? Math.round((spent - task.estimate) * 100) / 100 : null
@@ -141,12 +172,17 @@ export default function TaskDialog({ taskId, onClose }) {
         <div className="td-layout">
           <div className="td-main">
             <div className="td-toolbar">
+              <label className="td-time-member">Working as
+                <select value={activeMemberId} onChange={(e) => setTimeMemberId(e.target.value)}>
+                  {people.map((member) => <option key={member.id} value={member.id}>{member.name.trim() || 'unnamed'}</option>)}
+                </select>
+              </label>
               {running ? (
                 <button type="button" onClick={stop}>
                   ⏹ Stop timer
                 </button>
               ) : (
-                <button type="button" onClick={() => setPeople((list) => startTaskFor(list, person.id, task.id))}>
+                <button type="button" onClick={() => setPeople((list) => startTaskFor(list, activeMemberId, task.id))}>
                   ▶ Start timer
                 </button>
               )}
@@ -158,6 +194,9 @@ export default function TaskDialog({ taskId, onClose }) {
                 onClick={() => setShowTime((v) => !v)}
               >
                 ⏱ Log time · {Math.round(spent * 100) / 100} h {showTime ? '▴' : '▾'}
+              </button>
+              <button type="button" onClick={() => setEmailOpen(true)} title="Email this task to its owner and contributors">
+                ✉ Email
               </button>
             </div>
 
@@ -196,49 +235,79 @@ export default function TaskDialog({ taskId, onClose }) {
                 </button>
               </div>
 
-              {task.entries.length > 0 ? (
-                <table className="td-entries">
-                  <thead>
-                    <tr>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Hours</th>
-                      <th>Note</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {task.entries.map((e) => (
-                      <tr key={e.id}>
-                        <td>
-                          <input type="datetime-local" value={toLocalInput(e.start)} onChange={(ev) => patchEntry(e.id, { start: fromLocalInput(ev.target.value) })} />
-                        </td>
-                        <td>
-                          {e.end ? (
-                            <input type="datetime-local" value={toLocalInput(e.end)} onChange={(ev) => patchEntry(e.id, { end: fromLocalInput(ev.target.value) })} />
-                          ) : (
-                            <span className="muted">running…</span>
-                          )}
-                        </td>
-                        <td>{entryHours(e, now)}</td>
-                        <td>
-                          <input value={e.note} placeholder="note" onChange={(ev) => patchEntry(e.id, { note: ev.target.value })} />
-                        </td>
-                        <td>
-                          <button type="button" className="danger" title="Delete this entry" onClick={() => setEntries(task.entries.filter((x) => x.id !== e.id))}>
-                            ✕
-                          </button>
-                        </td>
+              {timeEntries.length > 0 ? (
+                <div className="td-entries-wrap">
+                  <table className="td-entries">
+                    <thead>
+                      <tr>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th>Person</th>
+                        <th>Hours</th>
+                        <th>Note</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {timeEntries.map((e) => (
+                        <tr key={e.id} className={editingEntryId === e.id ? 'editing' : undefined}>
+                          <td>
+                            {editingEntryId === e.id ? (
+                              <input type="datetime-local" aria-label="Edit start time" value={entryDraft?.start || ''} onChange={(ev) => setEntryDraft((draft) => ({ ...draft, start: ev.target.value }))} />
+                            ) : timeStamp(e.start)}
+                          </td>
+                          <td>
+                            {editingEntryId === e.id ? (
+                              <input type="datetime-local" aria-label="Edit end time" value={entryDraft?.end || ''} onChange={(ev) => setEntryDraft((draft) => ({ ...draft, end: ev.target.value }))} />
+                            ) : (
+                              e.end ? timeStamp(e.end) : <span className="muted">running…</span>
+                            )}
+                          </td>
+                          <td>
+                            {people.find((member) => member.id === e.memberId)?.name.trim() || person.name.trim() || 'Unassigned'}
+                          </td>
+                          <td>{entryHours(e, now)}</td>
+                          <td>
+                            {editingEntryId === e.id ? (
+                              <input aria-label="Edit time entry note" value={entryDraft?.note || ''} placeholder="note" onChange={(ev) => setEntryDraft((draft) => ({ ...draft, note: ev.target.value }))} />
+                            ) : (e.note || '—')}
+                          </td>
+                          <td className="td-entry-actions">
+                          <div className="td-entry-action-buttons">
+                            {editingEntryId === e.id ? (
+                              <>
+                                <button type="button" className="primary small" onClick={() => saveEntryEdit(e)}>Save</button>
+                                <button type="button" className="small" onClick={cancelEntryEdit}>Cancel</button>
+                              </>
+                            ) : (
+                              <>
+                                <button type="button" className="small" onClick={() => editEntry(e)}>Edit</button>
+                                {e.end ? (
+                                  <button type="button" className="small" title="Start a new timer for this person on this task" onClick={() => resumeEntry(e)}>▶ Resume</button>
+                                ) : (
+                                  <button type="button" className="small" title="Stop this person's timer" onClick={() => stopEntry(e)}>⏹ Stop</button>
+                                )}
+                                <button type="button" className="danger small" title="Delete this entry" onClick={() => setEntries(task.entries.map((x) => {
+                                  if (x.id !== e.id) return x
+                                  const at = new Date().toISOString()
+                                  return { ...x, deletedAt: at, updatedAt: at }
+                                }))}>✕</button>
+                              </>
+                            )}
+                          </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <label className="td-manual">
                   No time entries yet — or type the total spent so far:
                   <input type="number" min="0" step="0.25" value={task.spent || ''} placeholder="hours" onChange={(e) => update({ spent: hours(e.target.value) })} />
                 </label>
               )}
+              {entryEditError && <p className="td-edit-error" role="alert">{entryEditError}</p>}
             </section>
             )}
 
@@ -365,6 +434,12 @@ export default function TaskDialog({ taskId, onClose }) {
                   </dd>
                 </div>
                 <div>
+                  <dt>Unplanned hours</dt>
+                  <dd>
+                    <input type="number" min="0" step="0.25" value={task.unplannedHours || ''} placeholder="0" onChange={(e) => update({ unplannedHours: hours(e.target.value) })} />
+                  </dd>
+                </div>
+                <div>
                   <dt>Total logged time</dt>
                   <dd className="td-static">{formatClock(spent)}</dd>
                 </div>
@@ -395,6 +470,7 @@ export default function TaskDialog({ taskId, onClose }) {
           </button>
         </footer>
       </div>
+      {emailOpen && <TaskEmailDialog task={task} owner={person} people={people} sprints={sprints} onClose={() => setEmailOpen(false)} />}
     </div>
   )
 }
