@@ -3190,10 +3190,12 @@
 .pm-root .td-entries th:nth-child(4) { width: 62px; }
 .pm-root .td-entries th:nth-child(6) { width: 172px; }
 .pm-root .td-entries td:nth-child(4) { font-variant-numeric: tabular-nums; }
-.pm-root .td-entries td:nth-child(6) { text-align: right; }
+.pm-root .td-entries td:nth-child(6) { text-align: left; }
 .pm-root .td-entries input { height: 40px; }
 .pm-root .td-entry-actions { white-space: nowrap; }
-.pm-root .td-entry-actions button + button { margin-left: 4px; }
+.pm-root .td-entry-action-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pm-root .td-entry-action-buttons button { min-height: 30px; padding: 3px 7px; font-size: 11px; white-space: nowrap; }
+.pm-root .td-entries tr.editing { background: rgba(0, 0, 0, .12); }
 .pm-root .td-edit-error { margin: 8px 0 0; color: var(--bad); font-size: 12px; }
 .pm-root .td-log > button { height: 40px; }
 .pm-root .td-log input { height: 40px; }

@@ -31,11 +31,12 @@ export default function TaskEmailDialog({task, owner, people, sprints, onClose})
       byPerson.set(memberId,(byPerson.get(memberId)||0)+entryHours(entry))
     })
     const timeRows=byPerson.size
-      ?[...byPerson].map(([memberId,hours])=>`  ${people.find(person=>person.id===memberId)?.name||'Unassigned'}: ${Math.round(hours*100)/100} h`).join('\n')
-      :`  ${owner.name||'Unassigned'}: ${spentHours(task)} h`
+      ?[...byPerson].map(([memberId,hours])=>`- ${people.find(person=>person.id===memberId)?.name.trim()||'Unassigned'}: ${Math.round(hours*100)/100} h`).join('\n')
+      :`- ${owner.name.trim()||'Unassigned'}: ${spentHours(task)} h`
     return [
       '',
       'Task details',
+      '------------',
       `Task: ${task.title||'Untitled task'}`,
       `Sprint: ${sprint?sprintLabel(sprint,sprints.indexOf(sprint)):'Backlog'}`,
       `Owner: ${owner.name||'Unassigned'}`,
