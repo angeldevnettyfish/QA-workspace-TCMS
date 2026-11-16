@@ -1,6 +1,7 @@
 import React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { BACKLOG, defaultSprintId, readyTasks, selectableSprints, sprintLabel } from '../lib/scrum'
+import PeoplePicker, { peopleChoices, PeopleOptions } from './PeoplePicker'
 
 let nextKey = 0
 const blankRow = (personId, sprintId, featureId = '') => ({
@@ -36,6 +37,7 @@ function TrashIcon() {
  * never left on someone's card.
  */
 export default function AddTasks({ people, sprints, sprintId, onAdd, onClose }) {
+  const personChoices = useMemo(() => peopleChoices(people), [people])
   const firstPerson = people[0]?.id || ''
   // Only the sprint in progress and the ones still to come can be planned into;
   // the label comes from the full list so "Sprint 3" keeps its number.
@@ -125,6 +127,7 @@ export default function AddTasks({ people, sprints, sprintId, onAdd, onClose }) 
             <p className="empty">Add a person first — a task has to belong to someone.</p>
           ) : (
             <div className="add-rows">
+              <PeopleOptions choices={personChoices} listId="planning-add-person-options" />
               <div className="add-row head">
                 <span>Task</span>
                 <span>Notes</span>
@@ -160,19 +163,16 @@ export default function AddTasks({ people, sprints, sprintId, onAdd, onClose }) 
                       }
                     }}
                   />
-                  <select
-                    value={row.personId}
-                    onChange={(e) => {
-                      update(row.key, { personId: e.target.value })
-                      setDefaultPerson(e.target.value)
+                  <PeoplePicker
+                    personId={row.personId}
+                    choices={personChoices}
+                    listId="planning-add-person-options"
+                    ariaLabel={`Assign task row ${i + 1}`}
+                    onChange={(personId) => {
+                      update(row.key, { personId })
+                      setDefaultPerson(personId)
                     }}
-                  >
-                    {people.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name.trim() || 'unnamed'}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <select
                     value={row.sprintId}
                     title="Which sprint this task goes into"

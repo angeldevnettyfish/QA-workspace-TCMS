@@ -647,9 +647,28 @@ export function patchTasks(people, ids, patch) {
   )
 }
 
-/** Handing a pile of tasks to one person, the move the board makes one by one. */
-export const moveTasks = (people, ids, toPersonId) =>
-  ids.reduce((list, id) => moveTask(list, id, toPersonId), people)
+/** Handing a pile of tasks to one person in one pass over a large board. */
+export function moveTasks(people, ids, toPersonId) {
+  const wanted = new Set(ids)
+  const target = people.find((person) => person.id === toPersonId)
+  if (!wanted.size || !target) return people
+
+  const moving = []
+  people.forEach((person) => {
+    if (person.id !== toPersonId) {
+      person.tasks.forEach((task) => {
+        if (wanted.has(task.id)) moving.push(task)
+      })
+    }
+  })
+  if (!moving.length) return people
+
+  return people.map((person) => {
+    if (person.id === toPersonId) return { ...person, tasks: [...person.tasks, ...moving] }
+    if (!person.tasks.some((task) => wanted.has(task.id))) return person
+    return { ...person, tasks: person.tasks.filter((task) => !wanted.has(task.id)) }
+  })
+}
 
 /** Dropping a pile of tasks. Anyone holding none of them is left alone. */
 export function removeTasks(people, ids) {

@@ -1,6 +1,6 @@
 import React from 'react'
 import TabStats from '../components/TabStats'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ALL_SPRINTS,
   BACKLOG,
@@ -30,6 +30,7 @@ import {
 } from '../lib/scrum'
 import { useScrum } from '../lib/scrumState'
 import AddTasks from '../components/AddTasks'
+import PeoplePicker, { peopleChoices, PeopleOptions } from '../components/PeoplePicker'
 import TaskDialog from '../components/TaskDialog'
 import PlanningSummaryDialog from '../components/PlanningSummaryDialog'
 
@@ -65,6 +66,8 @@ const h = (value) => (value ? String(Math.round(value * 100) / 100) : '')
  */
 export default function Planning() {
   const { people, setPeople, sprints, view, setView, features, addTasks, store } = useScrum()
+  const personChoices = useMemo(() => peopleChoices(people), [people])
+  const requestedSprintId = useMemo(() => new URLSearchParams(window.location.search).get('sprint'), [])
   const [adding, setAdding] = useState(false)
   const [openTaskId, setOpenTaskId] = useState(null)
   const [editingSpentTaskId, setEditingSpentTaskId] = useState('')
@@ -87,6 +90,12 @@ export default function Planning() {
   // null means "not chosen yet" and resolves to the sprint running today;
   // ALL_SPRINTS is the explicit "every sprint", which is no filter at all.
   const sprintId = planSprintScope(sprints, view.planSprintId)
+  useEffect(() => {
+    if (!requestedSprintId || !sprints.some((sprint) => sprint.id === requestedSprintId)) return
+    setView((current) => current.planSprintId === requestedSprintId
+      ? current
+      : { ...current, planSprintId: requestedSprintId })
+  }, [requestedSprintId, sprints, setView])
   const sprint = sprints.find((s) => s.id === sprintId) || null
   const sprintIndex = sprints.findIndex((s) => s.id === sprintId)
 
@@ -294,6 +303,8 @@ export default function Planning() {
       {!store.loading && !store.online && (
         <p className="warn">The QA backend is not reachable — changes are kept in this browser and will sync once it is running again.</p>
       )}
+
+      <PeopleOptions choices={personChoices} listId="planning-person-options" />
 
       <section className="controls">
         <label>
@@ -529,18 +540,15 @@ export default function Planning() {
                       />
                     </td>
                     <th className="left sticky-col">
-                      <select
+                      <PeoplePicker
                         className="task-select person-select"
-                        value={person.id}
+                        personId={person.id}
+                        choices={personChoices}
+                        listId="planning-person-options"
                         title="Hand this task to someone else"
-                        onChange={(e) => assignRow(task, e.target.value)}
-                      >
-                        {people.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name.trim() || 'unnamed'}
-                          </option>
-                        ))}
-                      </select>
+                        ariaLabel={`Assign ${task.title || 'task'} to a person`}
+                        onChange={(personId) => assignRow(task, personId)}
+                      />
                     </th>
                     <td className="left">
                       <button

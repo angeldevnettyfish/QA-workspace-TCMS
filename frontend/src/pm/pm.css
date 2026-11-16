@@ -2193,6 +2193,9 @@
 .pm-root table.plan-table select.task-select{
  max-width: 100%; width: 100%; font-size: 13px; 
 }
+.pm-root table.plan-table input.task-select{
+ max-width: 100%; width: 100%; font-size: 13px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: #171717; color: var(--muted);
+}
 .pm-root table.plan-table .person-select{
  font-weight: 600; color: var(--ink); 
 }

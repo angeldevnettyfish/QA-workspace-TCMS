@@ -1,5 +1,6 @@
 """Team-wide sprint planning, workload tracking and spreadsheet interchange."""
 import csv
+import asyncio
 import html
 import base64
 import binascii
@@ -233,6 +234,16 @@ class ScrumBoardIn(BaseModel):
     people: list[dict] = Field(default_factory=list, max_length=500)
     sprints: list[dict] = Field(default_factory=list, max_length=500)
     settings: dict = Field(default_factory=dict)
+    version: str | None = None
+
+
+def scrum_board_version(row):
+    if not row or not row.updated_at:
+        return None
+    value = row.updated_at
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec='microseconds')
 
 
 class InlineImageIn(BaseModel):
@@ -514,21 +525,56 @@ def create_resource_router(db, user, elevated, obj, data, audit):
     @router.get('/scrum')
     def get_scrum_board(s:Session=Depends(db), u=Depends(manager)):
         row = s.get(ResourceScrumBoard, 1)
-        return row.data if row and row.data else {'people':[], 'sprints':[], 'settings':{}}
+        if not row or not row.data:
+            return {'people':[], 'sprints':[], 'settings':{}, 'version':None}
+        return {**row.data, 'version':scrum_board_version(row)}
+
+    @router.get('/scrum/events')
+    async def scrum_board_events(u=Depends(manager)):
+        from .scrum_events import subscribe, unsubscribe
+        queue = subscribe()
+
+        async def stream():
+            try:
+                yield 'event: ready\ndata: {}\n\n'
+                while True:
+                    try:
+                        version = await asyncio.wait_for(queue.get(), timeout=15)
+                        yield f'event: update\ndata: {json.dumps({"version":version})}\n\n'
+                    except asyncio.TimeoutError:
+                        yield ': keep-alive\n\n'
+            finally:
+                unsubscribe(queue)
+
+        return StreamingResponse(stream(), media_type='text/event-stream', headers={
+            'Cache-Control':'no-cache', 'X-Accel-Buffering':'no', 'Connection':'keep-alive'
+        })
 
     @router.put('/scrum')
     def save_scrum_board(body:ScrumBoardIn, s:Session=Depends(db), u=Depends(manager)):
         payload = body.model_dump()
+        expected_version = payload.pop('version')
         if len(json.dumps(payload)) > 8_000_000:
             raise HTTPException(413, 'Scrum board is too large')
         row = s.scalar(select(ResourceScrumBoard).where(ResourceScrumBoard.id==1).with_for_update())
         if row is None:
+            if expected_version is not None:
+                raise HTTPException(409, 'The Scrum board changed. Refresh and merge before saving.')
             s.add(ResourceScrumBoard(id=1, data=payload))
         else:
+            if expected_version != scrum_board_version(row):
+                raise HTTPException(409, 'The Scrum board changed. Refresh and merge before saving.')
             payload = merge_scrum_time_entries(row.data, payload)
             row.data = payload
+            previous = row.updated_at
+            if previous is None:
+                previous = datetime.min.replace(tzinfo=timezone.utc)
+            elif previous.tzinfo is None:
+                previous = previous.replace(tzinfo=timezone.utc)
+            row.updated_at = max(datetime.now(timezone.utc), previous + timedelta(microseconds=1))
         s.commit()
-        return {'ok': True}
+        row = s.get(ResourceScrumBoard, 1)
+        return {'ok': True, 'version':scrum_board_version(row)}
 
     @router.post('/email/summary')
     def send_summary_email(body:SummaryEmailIn, s:Session=Depends(db), u=Depends(manager)):
