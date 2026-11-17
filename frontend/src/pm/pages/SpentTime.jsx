@@ -1,6 +1,6 @@
 import React from 'react'
 import TabStats from '../components/TabStats'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import PivotTable from '../components/PivotTable'
 import MemberDetail from '../components/MemberDetail'
 import TaskDialog from '../components/TaskDialog'
@@ -74,11 +74,25 @@ function boardEntries(people, sprints) {
   return out
 }
 
-export default function SpentTime() {
+export default function SpentTime({ sharedSprint = '', onSharedSprint }) {
   const { people, sprints, reload, store } = useScrum()
   const [error, setError] = useState('')
   const [range, setRange] = useState(() => ({ from: monthStart(), to: isoDate(new Date()) }))
   const [reloading, setReloading] = useState(false)
+  // '' = every sprint. Picking a sprint also narrows the dates to that sprint.
+  const [sprintSel, setSprintSel] = useState('')
+  const sprintNames = useMemo(() => sprints.map((s, i) => sprintLabel(s, i)), [sprints])
+  const chooseSprint = (label, share = true) => {
+    setSprintSel(label)
+    const at = sprintNames.indexOf(label)
+    const sp = at >= 0 ? sprints[at] : null
+    setRange(sp && sp.start && sp.end ? { from: sp.start, to: sp.end } : { from: monthStart(), to: isoDate(new Date()) })
+    if (share && label && onSharedSprint) onSharedSprint(label)
+  }
+  useEffect(() => {
+    if (sharedSprint && sharedSprint !== sprintSel && sprintNames.includes(sharedSprint)) chooseSprint(sharedSprint, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedSprint, sprintNames])
   const [openTaskId, setOpenTaskId] = useState(null)
 
   const [rowField, setRowField] = useState('task')
@@ -94,9 +108,9 @@ export default function SpentTime() {
   const source = useMemo(
     () =>
       board.filter(
-        (e) => (!range.from || e.date >= range.from) && (!range.to || e.date <= range.to)
+        (e) => (!sprintSel || e.tags === sprintSel) && (!range.from || e.date >= range.from) && (!range.to || e.date <= range.to)
       ),
-    [board, range]
+    [board, range, sprintSel]
   )
   const taskIdFor = useMemo(() => new Map(board.map((e) => [e.task, e.taskId])), [board])
 
@@ -192,6 +206,17 @@ export default function SpentTime() {
       {error && <p className="error">{error}</p>}
 
       <section className="st-bar" aria-label="Spent time filters and pivot">
+        <label>
+          Sprint
+          <select value={sprintSel} onChange={(e) => chooseSprint(e.target.value)}>
+            <option value="">All sprints</option>
+            {sprintNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           From
           <input type="date" value={range.from} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />

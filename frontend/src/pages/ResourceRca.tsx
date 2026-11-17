@@ -1,5 +1,7 @@
 import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import {Plus, Trash2} from 'lucide-react';
+import {useScrum} from '../pm/lib/scrumState';
+import {sprintLabel} from '../pm/lib/scrum';
 
 type Api = (path:string, options?:RequestInit)=>Promise<any>;
 type Entry = {id:string;title:string;sprint:string;reason:string;comment?:string;actions?:string};
@@ -39,7 +41,10 @@ const newId=()=>`r${Date.now().toString(36)}${Math.random().toString(36).slice(2
 
 export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;sharedSprint?:string;onSharedSprint?:(name:string)=>void}) {
   const [entries,setEntries]=useState<Entry[]>([]);
-  const [sprintNames,setSprintNames]=useState<string[]>([]);
+  const [trackerNames,setTrackerNames]=useState<string[]>([]);
+  const {sprints:boardSprints}=useScrum() as {sprints:{name:string}[]};
+  const [pendingDelete,setPendingDelete]=useState<Entry|null>(null);
+  const sprintNames=useMemo(()=>Array.from(new Set([...boardSprints.map((s,i)=>sprintLabel(s,i)),...trackerNames])),[boardSprints,trackerNames]);
   const [loading,setLoading]=useState(true);
   const [title,setTitle]=useState('');
   const [sprint,setSprint]=useState('');
@@ -52,7 +57,7 @@ export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;s
   useEffect(()=>{
     let active=true;
     api('/resources/rca').then(data=>{if(!active)return;const rows:Entry[]=Array.isArray(data?.entries)?data.entries:[];setEntries(rows.length?rows:readLocal());}).catch(()=>{if(active)setEntries(readLocal());}).finally(()=>{if(active)setLoading(false);});
-    api('/resources/sprints').then((rows:{name:string}[])=>{if(active)setSprintNames(rows.map(r=>r.name));}).catch(()=>{});
+    api('/resources/sprints').then((rows:{name:string}[])=>{if(active)setTrackerNames(rows.map(r=>r.name));}).catch(()=>{});
     return()=>{active=false;};
   },[api]);
 
@@ -63,7 +68,8 @@ export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;s
   };
   const add=()=>{if(!title.trim()||!reason)return;update([{id:newId(),title:title.trim(),sprint:sprint.trim(),reason},...entries]);setTitle('');setReason('');};
   const patch=(id:string,change:Partial<Entry>)=>update(entries.map(e=>e.id===id?{...e,...change}:e));
-  const remove=(e:Entry)=>{if(window.confirm(`Delete "${e.title}" from the RCA list?`))update(entries.filter(x=>x.id!==e.id));};
+  const remove=(e:Entry)=>setPendingDelete(e);
+  const confirmDelete=()=>{if(pendingDelete)update(entries.filter(x=>x.id!==pendingDelete.id));setPendingDelete(null);};
 
   // Follow the sprint chosen on the other tabs.
   useEffect(()=>{if(sharedSprint&&sprintNames.some(n=>n.toLowerCase()===sharedSprint.toLowerCase()))setSprint(sprintNames.find(n=>n.toLowerCase()===sharedSprint.toLowerCase())||'');},[sharedSprint,sprintNames]);
@@ -83,6 +89,7 @@ export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;s
 
   if(loading)return <p role="status">Loading RCA…</p>;
   return <section className="rca">
+    <div className="rca-top">
     <form className="roadmap-controls rca-add" onSubmit={e=>{e.preventDefault();add();}}>
       <label className="rca-title">Issue title<input value={title} maxLength={300} placeholder="What was missed?" onChange={e=>setTitle(e.target.value)}/></label>
       <label>Sprint<select value={sprint} onChange={e=>{setSprint(e.target.value);if(e.target.value)onSharedSprint?.(e.target.value);}}><option value="">Select a sprint</option>{sprintOptions.map(n=><option key={n}>{n}</option>)}</select></label>
@@ -93,6 +100,7 @@ export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;s
       <label>Search<input type="search" placeholder="filter issues or sprints" value={search} onChange={e=>setSearch(e.target.value)}/></label>
       <label>Reason<select value={reasonFilter} onChange={e=>setReasonFilter(e.target.value)}><option value="">All reasons</option>{REASONS.map(r=><option key={r}>{r}</option>)}</select></label>
       <span className="rca-summary">{entries.length} issue{entries.length===1?'':'s'}{byReason[0]?` · most common: ${byReason[0][0]} (${byReason[0][1]})`:''}</span>
+    </div>
     </div>
     {entries.length>0&&<div className="rca-charts">
       <figure><figcaption>Issues per sprint</figcaption><LineChart points={perSprint}/></figure>
@@ -109,5 +117,10 @@ export default function ResourceRca({api,sharedSprint,onSharedSprint}:{api:Api;s
         <td><button className="secondary" aria-label={`Delete ${e.title}`} onClick={()=>remove(e)}><Trash2 size={14}/></button></td>
       </tr>{openId===e.id&&<tr className="rca-comment-row"><td/><td colSpan={5}><label>Comments<textarea rows={3} ref={grow} onInput={ev=>grow(ev.currentTarget)} maxLength={5000} placeholder="Add comments about this issue: what happened, impact, how to prevent it…" defaultValue={e.comment||''} onBlur={ev=>{if(ev.target.value!==(e.comment||''))patch(e.id,{comment:ev.target.value});}}/></label></td></tr>}</Fragment>)}</tbody>
     </table>{visible.length>20&&<p className="rca-limit">Showing the latest 20 of {visible.length} issues. Use the filters to narrow the list.</p>}{!visible.length&&<p className="task-empty">{entries.length?'No issues match these filters.':'No issues logged yet. Add the first one above.'}</p>}</div>
+    {pendingDelete&&<div className="rca-modal-backdrop" onClick={()=>setPendingDelete(null)}><div className="rca-modal" role="alertdialog" aria-modal="true" aria-labelledby="rca-del-title" onClick={ev=>ev.stopPropagation()} onKeyDown={ev=>{if(ev.key==='Escape')setPendingDelete(null);}}>
+      <h3 id="rca-del-title">Delete this issue?</h3>
+      <p>“{pendingDelete.title}” will be removed from the RCA list. This can’t be undone.</p>
+      <div className="rca-modal-actions"><button type="button" className="secondary" autoFocus onClick={()=>setPendingDelete(null)}>Cancel</button><button type="button" className="rca-danger" onClick={confirmDelete}>Delete</button></div>
+    </div></div>}
   </section>;
 }

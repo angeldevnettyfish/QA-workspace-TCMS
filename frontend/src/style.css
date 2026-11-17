@@ -1499,3 +1499,28 @@ button:disabled {
 .rca-table .rca-actions-col { min-width: 280px; text-align: left; }
 
 .rca-comment-row textarea, .task-description textarea { overflow: hidden; resize: none; min-height: 90px; }
+
+.rca-modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgb(0 0 0 / 60%); backdrop-filter: blur(2px); }
+.rca-modal { width: min(420px, calc(100vw - 32px)); padding: 22px 24px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 80px #0008; }
+.rca-modal h3 { margin: 0 0 8px; font-size: 16px; }
+.rca-modal p { margin: 0 0 18px; color: var(--muted); overflow-wrap: anywhere; }
+.rca-modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.rca-danger { background: #b4373f; border-color: #b4373f; color: #fff; }
+
+.rca-top { display: grid; grid-template-columns: minmax(0,3fr) minmax(0,2fr); gap: 16px; margin: 0 0 16px; align-items: stretch; }
+.rca-top > .roadmap-controls { margin: 0; flex-wrap: wrap; }
+.rca-top .rca-add .rca-title { flex: 1 1 100%; }
+.rca-top .rca-add button { margin-left: auto; }
+.rca-top .rca-summary { flex: 1 1 100%; margin-left: 0; }
+@media (max-width: 1000px) { .rca-top { grid-template-columns: 1fr; } }
+
+/* RCA top blocks: each block is a single compact row */
+.rca-top { grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap: 12px; }
+.rca-top > .roadmap-controls { flex-wrap: nowrap; align-items: flex-end; gap: 10px; padding: 10px 12px; }
+.rca-top .rca-add .rca-title { flex: 1 1 140px; min-width: 100px; }
+.rca-top .rca-add input, .rca-top .rca-add select, .rca-top .roadmap-controls input, .rca-top .roadmap-controls select { min-width: 0; }
+.rca-top .rca-add label:not(.rca-title) { flex: 0 1 170px; min-width: 110px; }
+.rca-top .rca-add button { margin-left: 0; flex: 0 0 auto; }
+.rca-top > .roadmap-controls:last-child label { flex: 0 1 170px; min-width: 100px; }
+.rca-top .rca-summary { flex: 1 1 auto; min-width: 0; margin: 0 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+@media (max-width: 1100px) { .rca-top { grid-template-columns: 1fr; } }

@@ -1,6 +1,6 @@
 import React from 'react'
 import TabStats from '../components/TabStats'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ALL_SPRINTS,
   BACKLOG,
@@ -84,6 +84,21 @@ export default function Planning({ trackerView, sharedSprint = '', onSharedSprin
   // ALL_SPRINTS is the explicit "every sprint", which is no filter at all.
   const sprintId = planSprintScope(sprints, view.planSprintId)
   const nameOf = (id) => (id === ALL_SPRINTS || id === null ? 'All sprints' : id === BACKLOG ? 'Backlog' : sprints.map((s, i) => [s.id, sprintLabel(s, i)]).find(([sid]) => sid === id)?.[1] || '')
+  // Planning always opens on the sprint running today (by its dates), not on whatever was left selected last time.
+  const resetDone = useRef(false)
+  useEffect(() => {
+    if (resetDone.current || !sprints.length) return
+    resetDone.current = true
+    setView((v) => ({ ...v, planSprintId: null }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sprints])
+  // Tell the other tabs which sprint that is, until somebody picks one.
+  useEffect(() => {
+    if (sharedSprint || !onSharedSprint || !resetDone.current || view.planSprintId !== null) return
+    const label = nameOf(sprintId)
+    if (label) onSharedSprint(label)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sprintId, sprints, sharedSprint, view.planSprintId])
   // Follow the sprint chosen on the Overview or RCA tab, and report this tab's own choice.
   useEffect(() => {
     if (!sharedSprint) return

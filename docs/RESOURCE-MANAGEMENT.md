@@ -1,6 +1,6 @@
-# Resource Management
+# SprintBoard
 
-Open **Resource Management** above Admin in the sidebar. Global Admin, QA Lead,
+Open **SprintBoard** above Admin in the sidebar. Global Admin, QA Lead,
 and Test Lead accounts can use this team-wide tracker. It is independent of the
 project selected elsewhere in the application.
 
@@ -41,7 +41,7 @@ recorded in the audit log. Imported CSV contents are not embedded in migrations.
 
 ## Daily email summary
 
-On the Resource Management overview, an Admin or QA/Test Lead can set the
+On the SprintBoard overview, an Admin or QA/Test Lead can set the
 recipient, daily send time (India Standard Time), and enable/disable the summary.
 The email includes active task details for all sprints, employee workload totals,
 and timesheets started that day. **Send summary now** sends an immediate preview
@@ -57,9 +57,9 @@ RESOURCE_SMTP_PASSWORD=your-gmail-app-password
 RESOURCE_SMTP_FROM=sender@gmail.com
 ```
 
-Recipients are not configured here: add them in the Resource Management Overview tab (Daily Resource Management email) and in the email popups.
+Recipients are not configured here: add them in the SprintBoard Overview tab (Daily SprintBoard email) and in the email popups.
 
 Never put the Gmail App Password in the browser or chat. Recreate the backend
 after updating `.env`. The scheduler runs in the backend process, uses Asia/Kolkata
-time, and records the last send date or delivery error in the Resource Management
+time, and records the last send date or delivery error in the SprintBoard
 email panel.

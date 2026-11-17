@@ -126,7 +126,7 @@ function ResourceOverview({api,embeddedSprint,sharedSprint,onSharedSprint}:{api:
   const detailItem=items.find(item=>item.id===detailId);
   const loadSprints=useCallback(async()=>{const rows=await api('/resources/sprints') as Sprint[];setSprints(rows);return rows;},[api]);
   const loadItems=useCallback(async(id:number)=>{setItems(await api(`/resources/sprints/${id}/items?include_archived=true`));},[api]);
-  useEffect(()=>{let active=true;void api('/resources/sprints').then((rows:Sprint[])=>{if(active){setSprints(rows);const requested=Number(new URLSearchParams(window.location.search).get('sprint'));const shared=rows.find(row=>row.name.toLowerCase()===String(sharedSprint||'').toLowerCase());const chosen=embedded?(rows.find(row=>row.name.toLowerCase()===String(embeddedSprint).toLowerCase())?.id??0):rows.some(row=>row.id===requested)?requested:shared?.id??rows[0]?.id??0;setSprintId(chosen);if(!embedded&&!shared){const row=rows.find(r=>r.id===chosen);if(row)onSharedSprint?.(row.name);}}}).catch(e=>{if(active)setError(String(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[api]);
+  useEffect(()=>{let active=true;void api('/resources/sprints').then((rows:Sprint[])=>{if(active){setSprints(rows);const requested=Number(new URLSearchParams(window.location.search).get('sprint'));const shared=rows.find(row=>row.name.toLowerCase()===String(sharedSprint||'').toLowerCase());const chosen=embedded?(rows.find(row=>row.name.toLowerCase()===String(embeddedSprint).toLowerCase())?.id??0):rows.some(row=>row.id===requested)?requested:shared?.id??rows[0]?.id??0;setSprintId(chosen);}}).catch(e=>{if(active)setError(String(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[api]);
   // Another tab picked a sprint: follow it so every tab shows the same one.
   useEffect(()=>{if(embedded||!sharedSprint)return;const match=sprints.find(row=>row.name.toLowerCase()===sharedSprint.toLowerCase());if(match)setSprintId(match.id);},[embedded,sharedSprint,sprints]);
   // Planning picked another tracker sprint: show that one.
@@ -290,7 +290,7 @@ export default function ResourceManagement({api}:{api:Api}) {
       <div hidden={tab!=='roadmap'}><ResourceRoadmap api={api}/></div>
       <div className="pm-root" hidden={tab!=='scrum'}><Scrum/></div>
       <div className="pm-root" hidden={tab!=='planning'}><Planning sharedSprint={sharedSprint} onSharedSprint={setSharedSprint} trackerView={(name:string)=><ResourceOverview api={api} embeddedSprint={name}/>}/></div>
-      <div className="pm-root" hidden={tab!=='spent-time'}><SpentTime/></div>
+      <div className="pm-root" hidden={tab!=='spent-time'}><SpentTime sharedSprint={sharedSprint} onSharedSprint={setSharedSprint}/></div>
       <div hidden={tab!=='rca'}><ResourceRca api={api} sharedSprint={sharedSprint} onSharedSprint={setSharedSprint}/></div>
     </ScrumProvider>
   </div>;
