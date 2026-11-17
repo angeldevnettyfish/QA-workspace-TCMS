@@ -4,15 +4,14 @@ import TestCases from './pages/TestCases';
 import Dashboard from './pages/Dashboard';
 import {Panel, Table, SelectField, Field} from './components/ui';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Activity, Bell, Bug, Calendar, CheckSquare, FileText, Folder, GitBranch, LayoutDashboard, List, LogOut, Play, ShieldCheck, SlidersHorizontal, Users, type LucideIcon} from 'lucide-react';
+import {Activity, Calendar, CheckSquare, Folder, GitBranch, LayoutDashboard, LogOut, Play, Users, type LucideIcon} from 'lucide-react';
 
 type Row = Record<string, any>;
-type Page = 'Dashboard'|'Projects'|'Test Cases'|'Plans & Cycles'|'Execution'|'Automation'|'Defects'|'Requirements'|'Custom Fields'|'Reports'|'Audit'|'Notifications'|'SprintBoard'|'Admin';
-const pages: Page[] = ['Dashboard','Projects','Test Cases','Plans & Cycles','Execution','Automation','Defects','Requirements','Custom Fields','Reports','Audit','Notifications','SprintBoard','Admin'];
+type Page = 'Dashboard'|'Projects'|'Test Cases'|'Plans & Cycles'|'Execution'|'Automation'|'SprintBoard'|'Admin';
+const pages: Page[] = ['Dashboard','Projects','Test Cases','Plans & Cycles','Execution','Automation','SprintBoard','Admin'];
 const pageIcons: Record<Page,LucideIcon> = {
   Dashboard:LayoutDashboard, Projects:Folder, 'Test Cases':CheckSquare, 'Plans & Cycles':Calendar,
-  Execution:Play, Automation:GitBranch, Defects:Bug, Requirements:List, 'Custom Fields':SlidersHorizontal,
-  Reports:FileText, Audit:ShieldCheck, Notifications:Bell, 'SprintBoard':Users, Admin:Users
+  Execution:Play, Automation:GitBranch, 'SprintBoard':Users, Admin:Users
 };
 const priorities = ['Low','Medium','High','Critical'];
 const globalRoles = [{value:'admin',label:'Admin'},{value:'qa_lead',label:'QA Lead'},{value:'test_lead',label:'Test Lead'},{value:'tester',label:'Tester'},{value:'viewer',label:'Viewer'}];
@@ -49,15 +48,9 @@ export default function App() {
   const [cycleId,setCycleId]=useState(0);
   const [cycleCases,setCycleCases]=useState<Row[]>([]);
   const [executions,setExecutions]=useState<Row[]>([]);
-  const [defects,setDefects]=useState<Row[]>([]);
-  const [requirements,setRequirements]=useState<Row[]>([]);
-  const [customFields,setCustomFields]=useState<Row[]>([]);
-  const [notifications,setNotifications]=useState<Row[]>([]);
   const [dashboardRefresh,setDashboardRefresh]=useState(0);
-  const [auditEvents,setAuditEvents]=useState<Row[]>([]);
   const [form,setForm]=useState<Row>({});
   const [editProjectId,setEditProjectId]=useState(0);
-  const [selectedCycle,setSelectedCycle]=useState(0);
   const [showArchived,setShowArchived]=useState(false);
   useEffect(()=>{sessionStorage.setItem('qa-current-page',page);},[page]);
   useEffect(()=>{
@@ -104,26 +97,25 @@ export default function App() {
   },[]);
   const post=useCallback((path:string,value:Row)=>api(path,{method:'POST',body:JSON.stringify(value)}),[api]);
   const refresh=useCallback(async()=>{
-    const [me,projectRows,noticeRows]=await Promise.all([api('/me'),api(`/projects${showArchived?'?include_archived=true':''}`),api('/notifications')]);
-    setUser(me);setProjects(projectRows);setNotifications(noticeRows);
+    const [me,projectRows]=await Promise.all([api('/me'),api(`/projects${showArchived?'?include_archived=true':''}`)]);
+    setUser(me);setProjects(projectRows);
     if(!projectRows.some((p:Row)=>p.id===projectId))setProjectId(projectRows[0]?.id??0);
     if((me.roles??[me.role]).includes('admin'))setUsers(await api('/users'));
   },[api,projectId,showArchived]);
   const refreshProject=useCallback(async()=>{
     if(!authenticated||!projectId)return;
-    const [caseRows,planRows,cycleRows,defectRows,members,fields,reqs]=await Promise.all([
+    const [caseRows,planRows,cycleRows,members]=await Promise.all([
       api(`/cases?project_id=${projectId}${showArchived?'&include_archived=true':''}`),
       api(`/plans?project_id=${projectId}`),api(`/cycles?project_id=${projectId}`),
-      api(`/defects?project_id=${projectId}`),
-      api(`/projects/${projectId}/members`),api(`/custom-fields?project_id=${projectId}`),api(`/requirements?project_id=${projectId}`)
+      api(`/projects/${projectId}/members`)
     ]);
-    setCases(caseRows);setPlans(planRows);setCycles(cycleRows);setDefects(defectRows);setDashboardRefresh(value=>value+1);
+    setCases(caseRows);setPlans(planRows);setCycles(cycleRows);setDashboardRefresh(value=>value+1);
     if((user?.roles??[user?.role]).includes('admin'))setUsers(await api('/users'));
     else {
       const directory=canLead?await api(`/projects/${projectId}/available-users`):[];
       setUsers([...members.map((m:Row)=>({id:m.user_id,name:m.name,email:m.email,role:m.role,active:true})),...directory]);
     }
-    setProjects(prev=>prev.map(p=>p.id===projectId?{...p,members}:p));setCustomFields(fields);setRequirements(reqs);
+    setProjects(prev=>prev.map(p=>p.id===projectId?{...p,members}:p));
     if(!cycleRows.some((c:Row)=>c.id===cycleId))setCycleId(cycleRows[0]?.id??0);
   },[api,authenticated,projectId,cycleId,canLead,showArchived,user]);
   const refreshCycle=useCallback(async()=>{
@@ -137,11 +129,6 @@ export default function App() {
   useEffect(()=>{if(authenticated)void refresh().catch(e=>setError(String(e)));},[authenticated,refresh]);
   useEffect(()=>{if(authenticated)void refreshProject().catch(e=>setError(String(e)));},[authenticated,refreshProject]);
   useEffect(()=>{if(authenticated)void refreshCycle().catch(e=>setError(String(e)));},[authenticated,refreshCycle]);
-  useEffect(()=>{if(authenticated&&page==='Audit')void api(`/audit?project_id=${projectId}`).then(setAuditEvents).catch(e=>setError(String(e)));},[authenticated,page,projectId,api]);
-
-  const download=async(path:string,name:string)=>{
-    const blob=await api(path) as Blob;const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);
-  };
   const handleLogin=async(event:React.FormEvent<HTMLFormElement>)=>{
     event.preventDefault();
     if(authBusy)return;
@@ -180,12 +167,12 @@ export default function App() {
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Activity size={19}/></div><div><div className="brand-name">docpanel</div><div className="brand-caption">QA workspace</div></div></div>
-      <nav className="nav-list" aria-label="Main navigation">{pages.filter(p=>p!=='SprintBoard'||isAdmin||isGlobalLead).map(p=>{const Icon=pageIcons[p];return <button key={p} className={`nav ${page===p?'active':''}`} onClick={()=>{if(new URLSearchParams(window.location.search).get('view')==='sprint-tasks')window.history.replaceState(null,'',window.location.pathname);setPage(p);setForm({});}}><Icon size={17}/><span>{p}{p==='Notifications'?` (${notifications.filter(n=>!n.read).length})`:''}</span></button>;})}</nav>
+      <nav className="nav-list" aria-label="Main navigation">{pages.filter(p=>p!=='SprintBoard'||isAdmin||isGlobalLead).map(p=>{const Icon=pageIcons[p];return <button key={p} className={`nav ${page===p?'active':''}`} onClick={()=>{if(new URLSearchParams(window.location.search).get('view')==='sprint-tasks')window.history.replaceState(null,'',window.location.pathname);setPage(p);setForm({});}}><Icon size={17}/><span>{p}</span></button>;})}</nav>
       <div className="sidebar-footer"><div className="user-avatar">{String(user?.name??'U').split(/\s+/).map((part:string)=>part[0]).join('').slice(0,2).toUpperCase()}</div><div className="user-meta"><strong>{user?.name}</strong><small>{currentRole}</small></div><button className="nav sign-out" aria-label="Sign out" title="Sign out" onClick={()=>void handleLogout()}><LogOut size={17}/></button></div>
     </aside>
     <div className="main-shell"><main className={`content ${page==='Test Cases'?'test-cases-page':''} ${page==='SprintBoard'&&new URLSearchParams(window.location.search).get('view')==='sprint-tasks'?'resource-task-page':''}`}><header className="page-header"><div className="page-heading"><span className="eyebrow">Docpanel QA / Workspace</span><h1>{page}</h1></div><div className="page-header-actions">{page==='Automation'&&<div className="automation-header-actions" ref={setAutomationHeaderActions}/>}{page!=='SprintBoard'&&<div className="project-switcher" ref={projectMenuRef}><button type="button" className="header-project" aria-haspopup="listbox" aria-expanded={projectMenuOpen} onClick={()=>setProjectMenuOpen(open=>!open)}><Folder size={16}/><span>{projects.find(p=>p.id===projectId)?.name??'No project selected'}</span></button>{projectMenuOpen&&<div className="project-menu" role="listbox" aria-label="Projects">{projects.map(p=><button type="button" role="option" aria-selected={projectId===p.id} key={p.id} className={`project-menu-option ${projectId===p.id?'active':''}`} title={p.name} onClick={()=>{setProjectId(p.id);setProjectMenuOpen(false);}}>{p.name}</button>)}{!projects.length&&<p className="no-projects">No projects available</p>}</div>}</div>}</div></header>
       {error&&<div className="error" role="alert" onClick={()=>setError('')}>{error} ×</div>}
-      {!projectId&&page!=='Dashboard'&&page!=='Test Cases'&&page!=='Projects'&&page!=='Admin'&&page!=='Notifications'&&page!=='SprintBoard'&&<Panel title="No project selected">Create a project or ask an administrator to grant you access.</Panel>}
+      {!projectId&&page!=='Dashboard'&&page!=='Test Cases'&&page!=='Projects'&&page!=='Admin'&&page!=='SprintBoard'&&<Panel title="No project selected">Create a project or ask an administrator to grant you access.</Panel>}
 
       {page==='Dashboard'&&<Dashboard key={projectId} projectId={projectId} cycles={cycles} plans={plans} api={api} refreshVersion={dashboardRefresh}/> }
 
@@ -201,15 +188,6 @@ export default function App() {
 
       {page==='Automation'&&projectId>0&&<><AutomationRunner key={projectId} headerActions={automationHeaderActions} projectId={projectId} cycleId={cycleId} cycles={cycles} canLead={canLead} api={api} onReport={()=>{void refreshCycle().catch(e=>setError(String(e)));setDashboardRefresh(v=>v+1);}}/></>}
 
-      {page==='Defects'&&projectId>0&&<><Panel title="Defect tracking"><div className="grid">{field('defectSearch','Search title')}<SelectField label="Filter status" value={form.defectStatus??''} onChange={v=>setForm(f=>({...f,defectStatus:v}))} items={['New','Open','In Progress','Fixed','Retest','Closed','Reopened'].map(x=>({value:x,label:x}))}/><button onClick={()=>void api(`/defects?project_id=${projectId}&q=${encodeURIComponent(form.defectSearch??'')}${form.defectStatus?`&status=${encodeURIComponent(form.defectStatus)}`:''}`).then(setDefects).catch(e=>setError(String(e)))}>Filter</button></div><Table headers={['Key','Title','Severity','Priority','Status','Assignee','Actions']}>{defects.map(d=><tr key={d.id}><td>BUG-{d.id}</td><td>{d.title}</td><td>{d.severity}</td><td>{d.priority}</td><td><select value={d.status} onChange={e=>void run(()=>api(`/defects/${d.id}?status=${encodeURIComponent(e.target.value)}`,{method:'PATCH'}))}>{['New','Open','In Progress','Fixed','Retest','Closed','Reopened'].map(x=><option key={x}>{x}</option>)}</select></td><td>{d.assigned_to??'—'}</td><td><button onClick={()=>void api(`/defects/${d.id}`).then(x=>setForm(f=>({...f,defectDetails:x}))).catch(e=>setError(String(e)))}>Details</button></td></tr>)}</Table>{form.defectDetails&&<pre>{JSON.stringify(form.defectDetails,null,2)}</pre>}</Panel><Panel title="Create defect">{field('defectTitle','Title','text',true)}{field('defectDescription','Description')}{select('severity','Severity',priorities)}{select('defectPriority','Priority',priorities)}<SelectField label="Link execution attempt" value={form.execution_id??''} onChange={v=>setForm(f=>({...f,execution_id:v?Number(v):null}))} items={executions.map(e=>({value:e.id,label:`#${e.id} ${e.status}`}))}/><SelectField label="Assign to project member" value={form.assigned_to??''} onChange={v=>setForm(f=>({...f,assigned_to:v?Number(v):null}))} items={memberOptions}/><button onClick={()=>void run(()=>post('/defects',{project_id:projectId,title:form.defectTitle,description:form.defectDescription??'',severity:form.severity||'Medium',priority:form.defectPriority||'Medium',assigned_to:form.assigned_to||null,execution_ids:form.execution_id?[Number(form.execution_id)]:[]}))}>Create defect</button></Panel></>}
-
-      {page==='Requirements'&&projectId>0&&<><Panel title="Requirement traceability">{requirements.map(r=><div className="run" key={r.id}><b>{r.key}: {r.title}</b><p>{r.description}</p><small>{r.case_ids?.length??0} linked test cases</small><div className="grid"><SelectField label="Link case" value={form.requirementCase??''} onChange={v=>setForm(f=>({...f,requirementCase:Number(v)}))} items={cases.map(c=>({value:c.id,label:`TC-${c.id}: ${c.title}`}))}/><button onClick={()=>void run(()=>api(`/requirements/${r.id}/cases?case_id=${form.requirementCase}`,{method:'POST'}))}>Link</button><button className="secondary" onClick={()=>void api(`/requirements/coverage?project_id=${projectId}`).then(x=>setForm(f=>({...f,coverage:x}))).catch(e=>setError(String(e)))}>Coverage</button></div></div>)}{form.coverage&&<pre>{JSON.stringify(form.coverage,null,2)}</pre>}</Panel><Panel title="Add requirement">{field('reqKey','Requirement key','text',true)}{field('reqTitle','Title','text',true)}{field('reqDescription','Description')}<button onClick={()=>void run(()=>post('/requirements',{project_id:projectId,key:form.reqKey,title:form.reqTitle,description:form.reqDescription??''}))}>Create requirement</button></Panel></>}
-
-      {page==='Custom Fields'&&projectId>0&&<><Panel title="Custom field definitions"><Table headers={['Name','Type','Required','Options']}>{customFields.map(c=><tr key={c.id}><td>{c.name}</td><td>{c.field_type}</td><td>{String(c.required)}</td><td>{JSON.stringify(c.options)}</td></tr>)}</Table></Panel>{canLead&&<Panel title="Add custom field">{field('customName','Name','text',true)}{select('customType','Type',['text','number','date','boolean','select'])}{field('customOptions','Options (comma separated)')}<label><input type="checkbox" checked={!!form.customRequired} onChange={e=>setForm(f=>({...f,customRequired:e.target.checked}))}/> Required</label><button onClick={()=>void run(()=>api(`/custom-fields?project_id=${projectId}&name=${encodeURIComponent(form.customName)}&field_type=${form.customType}&required=${!!form.customRequired}${form.customType==='select'?`&options=${encodeURIComponent(JSON.stringify(String(form.customOptions??'').split(',').map((v:string)=>v.trim()).filter(Boolean)))}`:''}`,{method:'POST'}))}>Add field</button></Panel>}<p>Set values when creating or editing test cases in the repository.</p></>}
-
-      {page==='Reports'&&projectId>0&&<Panel title="CSV reports"><p>Export project-level execution and defect summaries for authorized reporting.</p><SelectField label="Optional cycle filter" value={selectedCycle} onChange={v=>setSelectedCycle(Number(v))} items={[{value:0,label:'All cycles'},...cycleOptions]}/><div className="buttons"><button onClick={()=>void download(`/reports/executions.csv?project_id=${projectId}${selectedCycle?`&cycle_id=${selectedCycle}`:''}`,'executions.csv')}>Export execution report</button><button onClick={()=>void download(`/reports/defects.csv?project_id=${projectId}`,'defects.csv')}>Export defect report</button></div></Panel>}
-      {page==='Audit'&&<Panel title="Privileged-change history"><Table headers={['Time','Actor','Action','Entity','Entity ID','Before','After']}>{auditEvents.map(a=><tr key={a.id}><td>{String(a.created_at??'')}</td><td>{a.actor_id}</td><td>{a.action}</td><td>{a.entity_type}</td><td>{a.entity_id}</td><td><pre>{JSON.stringify(a.before)}</pre></td><td><pre>{JSON.stringify(a.after)}</pre></td></tr>)}</Table></Panel>}
-      {page==='Notifications'&&<Panel title="Notifications">{notifications.map(n=><div className="item" key={n.id}><b>{n.title}</b><span>{n.message}</span>{!n.read&&<button onClick={()=>void run(()=>api(`/notifications/${n.id}/read`,{method:'POST'}))}>Mark read</button>}</div>)}</Panel>}
       {page==='SprintBoard'&&((isAdmin||isGlobalLead)?<ResourceManagement api={api}/>:<Panel title="SprintBoard">Only administrators and QA / Test Leads can access the team tracker.</Panel>)}
       {page==='Admin'&&<>{isAdmin?<><Panel title="User administration"><Table headers={['Name','Email','Global roles','Active','Update']}>{users.map(u=><tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><RoleCheckboxes name={`Roles for ${u.email}`} value={u.roles??[u.role]} onChange={roles=>setUsers(prev=>prev.map(x=>x.id===u.id?{...x,roles}:x))}/></td><td><input type="checkbox" checked={u.active} onChange={e=>setUsers(prev=>prev.map(x=>x.id===u.id?{...x,active:e.target.checked}:x))}/></td><td><button onClick={()=>void run(()=>api(`/users/${u.id}`,{method:'PATCH',body:JSON.stringify({roles:users.find(x=>x.id===u.id)?.roles??[u.role],active:users.find(x=>x.id===u.id)?.active})}))}>Save</button></td></tr>)}</Table></Panel><Panel title="Create user">{field('newName','Name','text',true)}{field('newEmail','Email','email',true)}{field('newPassword','Temporary password (12+ characters)','password',true)}<RoleCheckboxes name="New account roles" value={form.newRoles??['tester']} onChange={newRoles=>setForm(prev=>({...prev,newRoles}))}/><button onClick={()=>void run(()=>post('/users',{name:form.newName,email:form.newEmail,password:form.newPassword,roles:form.newRoles??['tester']}))}>Create Username</button></Panel></>:<Panel title="Administration">Only an administrator can manage accounts.</Panel>}</>}
     </main></div>
