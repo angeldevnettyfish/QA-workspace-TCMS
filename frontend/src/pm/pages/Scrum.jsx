@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   BACKLOG,
   SCRUM_STATUSES,
-  activeTimeEntries,
   blankEntry,
   blankNote,
   blankSprint,
@@ -31,7 +30,7 @@ import {
   sortedLog,
   spentHours,
   startTaskFor,
-  stopTaskFor,
+  stopTimer,
   toLocalInput,
   trackedHours,
   sprintLabel,
@@ -220,7 +219,13 @@ export default function Scrum() {
     setPeople((list) => startTaskFor(list, person.id, task.id))
 
   const stop = (person, task) =>
-    setPeople((list) => stopTaskFor(list, person.id, task.id))
+    setPeople((list) =>
+      list.map((p) =>
+        p.id === person.id
+          ? { ...p, tasks: p.tasks.map((t) => (t.id === task.id ? stopTimer(t) : t)) }
+          : p
+      )
+    )
 
   const toggleTimes = (taskId) =>
     setOpenTimes((prev) => {
@@ -230,24 +235,18 @@ export default function Scrum() {
     })
 
   /** A row typed in by hand, for work done away from the keyboard. */
-  const addEntry = (person, task) => {
-    const at = new Date().toISOString()
+  const addEntry = (person, task) =>
     updateTask(person.id, task.id, {
-      entries: [...task.entries, { ...blankEntry(), id: newId('en'), memberId: person.id, start: at, updatedAt: at }]
+      entries: [...task.entries, { ...blankEntry(), id: newId('en'), start: new Date().toISOString() }]
     })
-  }
 
   const updateEntry = (person, task, entryId, patch) =>
     updateTask(person.id, task.id, {
-      entries: task.entries.map((e) => (e.id === entryId ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e))
+      entries: task.entries.map((e) => (e.id === entryId ? { ...e, ...patch } : e))
     })
 
   const removeEntry = (person, task, entryId) =>
-    updateTask(person.id, task.id, { entries: task.entries.map((e) => {
-      if (e.id !== entryId) return e
-      const at = new Date().toISOString()
-      return { ...e, deletedAt: at, updatedAt: at }
-    }) })
+    updateTask(person.id, task.id, { entries: task.entries.filter((e) => e.id !== entryId) })
 
   /** Drag and drop: onto another task to place it, onto a card to reassign. */
   const dropOnTask = (toPersonId, targetTaskId, after) => {
@@ -836,8 +835,7 @@ export default function Scrum() {
                             onChange={(e) => updateTask(person.id, task.id, { title: e.target.value })}
                           />
                           {(() => {
-                            const timeEntries = activeTimeEntries(task)
-                            const running = isRunning(task, person.id)
+                            const running = isRunning(task)
                             const logged = spentHours(task, now)
                             return (
                               <>
@@ -851,12 +849,12 @@ export default function Scrum() {
                                   }
                                   onClick={() => (running ? stop(person, task) : start(person, task))}
                                 >
-                                  {running ? `⏹ ${elapsedLabel(runningEntry(task, person.id), now)}` : '▶'}
+                                  {running ? `⏹ ${elapsedLabel(runningEntry(task), now)}` : '▶'}
                                 </button>
                                 <button
                                   type="button"
-                                  className={`logged${timeEntries.length ? ' has' : ''}`}
-                                  title={`${timeEntries.length} time entr(y/ies) — click to list them`}
+                                  className={`logged${task.entries.length ? ' has' : ''}`}
+                                  title={`${task.entries.length} time entr(y/ies) — click to list them`}
                                   onClick={() => toggleTimes(task.id)}
                                 >
                                   ⏱ {logged ? `${logged}h` : '—'}
@@ -908,9 +906,8 @@ export default function Scrum() {
                         </div>
                         {openTimes.has(task.id) && (
                           <div className="time-entries">
-                            {activeTimeEntries(task).map((entry) => (
+                            {task.entries.map((entry) => (
                               <div className="time-entry" key={entry.id}>
-                                <span className="entry-member">{people.find((member) => member.id === entry.memberId)?.name.trim() || person.name.trim() || 'Unassigned'}</span>
                                 <input
                                   type="datetime-local"
                                   value={toLocalInput(entry.start)}
@@ -957,7 +954,7 @@ export default function Scrum() {
                                 + Add time entry
                               </button>
                               <span className="muted">
-                                {activeTimeEntries(task).length} entr{activeTimeEntries(task).length === 1 ? 'y' : 'ies'} ·{' '}
+                                {task.entries.length} entr{task.entries.length === 1 ? 'y' : 'ies'} ·{' '}
                                 {trackedHours(task, now)}h logged
                               </span>
                             </div>

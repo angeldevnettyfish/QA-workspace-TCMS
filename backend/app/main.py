@@ -1,4 +1,5 @@
 import os, hmac, hashlib, secrets, io, csv, json, re, logging, time, asyncio, hashlib as _hashlib, xml.etree.ElementTree as ET
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -12,11 +13,11 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey,
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
 import jwt
-from .models import Base, now, User, Project, Membership, TestFolder, TestCase, CaseVersion, TestPlan, PlanCase, Cycle, CycleCase, Execution, Defect, DefectExecution, AutomationMap, AutomationTestResults, ImportLog, Attachment, AuditEvent, ApiToken, Notification, RequirementRecord, RequirementCase, CustomField, ResourceScrumBoard
+from .models import Base, now, User, Project, Membership, TestFolder, TestCase, CaseVersion, TestPlan, PlanCase, Cycle, CycleCase, Execution, Defect, DefectExecution, AutomationMap, AutomationTestResults, ImportLog, Attachment, AuditEvent, ApiToken, Notification, RequirementRecord, RequirementCase, CustomField
 from .dashboard import create_dashboard_router
 from .test_cases import create_test_cases_router
 from .bitbucket import create_bitbucket_router
-from .resources import create_resource_router, scrum_board_version
+from .resources import create_resource_router, process_due_resource_email
 
 from .config import database_url
 
@@ -161,27 +162,6 @@ def validate_custom_values(session, project_id, values):
         if definition.field_type=='boolean' and not isinstance(value,bool):
             raise HTTPException(400,f'{definition.name} must be true or false')
 
-def read_scrum_board_version():
-    with SessionLocal() as session:
-        return scrum_board_version(session.get(ResourceScrumBoard, 1))
-
-async def watch_scrum_board():
-    from .scrum_events import publish
-    try:
-        last_version = await asyncio.to_thread(read_scrum_board_version)
-    except Exception:
-        last_version = None
-    while True:
-        await asyncio.sleep(0.5)
-        try:
-            version = await asyncio.to_thread(read_scrum_board_version)
-        except Exception:
-            logging.getLogger('qa_manager').exception('Scrum board change watcher could not read the database')
-            continue
-        if version != last_version:
-            last_version = version
-            publish(version)
-
 @asynccontextmanager
 async def lifespan(app):
     from alembic import command
@@ -195,15 +175,20 @@ async def lifespan(app):
             if not pw or len(pw)<12: raise RuntimeError('Set ADMIN_PASSWORD with at least 12 characters')
             s.add(User(email=email,name='Administrator',password_hash=password_hash(pw),role='admin',roles=['admin'])); s.commit()
     os.makedirs(UPLOAD_DIR,exist_ok=True)
-    watcher = asyncio.create_task(watch_scrum_board())
+    async def resource_email_worker():
+        while True:
+            try:
+                await asyncio.to_thread(process_due_resource_email, SessionLocal)
+            except Exception:
+                logger.exception('Daily resource email scheduler failed')
+            await asyncio.sleep(30)
+    worker = asyncio.create_task(resource_email_worker())
     try:
         yield
     finally:
-        watcher.cancel()
-        try:
-            await watcher
-        except asyncio.CancelledError:
-            pass
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
 app=FastAPI(title='Docpanel QA API',lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv('CORS_ORIGINS','http://localhost:5173,http://localhost:8080').split(',')],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 logger=logging.getLogger('qa_manager')

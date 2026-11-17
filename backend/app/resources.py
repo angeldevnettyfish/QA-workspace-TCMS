@@ -1,6 +1,5 @@
 """Team-wide sprint planning, workload tracking and spreadsheet interchange."""
 import csv
-import asyncio
 import html
 import base64
 import binascii
@@ -234,16 +233,16 @@ class ScrumBoardIn(BaseModel):
     people: list[dict] = Field(default_factory=list, max_length=500)
     sprints: list[dict] = Field(default_factory=list, max_length=500)
     settings: dict = Field(default_factory=dict)
-    version: str | None = None
 
 
-def scrum_board_version(row):
-    if not row or not row.updated_at:
-        return None
-    value = row.updated_at
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat(timespec='microseconds')
+class RoadmapIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    features: list[dict] = Field(default_factory=list, max_length=2000)
+
+
+class RcaIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    entries: list[dict] = Field(default_factory=list, max_length=5000)
 
 
 class InlineImageIn(BaseModel):
@@ -255,38 +254,14 @@ class InlineImageIn(BaseModel):
 class SummaryEmailIn(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     to: list[str] = Field(min_length=1, max_length=50)
-    cc: list[str] = Field(default_factory=list, max_length=50)
     subject: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=100_000)
     html: str = Field(default='', max_length=300_000)
     images: list[InlineImageIn] = Field(default_factory=list, max_length=3)
 
-    @field_validator('to', 'cc')
+    @field_validator('to')
     @classmethod
-    def validate_recipients(cls, values):
-        for value in values:
-            if not re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', value):
-                raise ValueError(f'Invalid recipient address: {value[:80]}')
-        return values
-
-    @field_validator('subject')
-    @classmethod
-    def validate_subject(cls, value):
-        if any(char in value for char in ('\n', '\r')):
-            raise ValueError('Subject must be a single line')
-        return value
-
-
-class TaskEmailIn(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    to: list[str] = Field(min_length=1, max_length=50)
-    cc: list[str] = Field(default_factory=list, max_length=50)
-    subject: str = Field(min_length=1, max_length=200)
-    text: str = Field(min_length=1, max_length=100_000)
-
-    @field_validator('to', 'cc')
-    @classmethod
-    def validate_addresses(cls, values):
+    def validate_to(cls, values):
         for value in values:
             if not re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', value):
                 raise ValueError(f'Invalid recipient address: {value[:80]}')
@@ -327,52 +302,6 @@ class ResourceEmailSettingsIn(BaseModel):
 
 def utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-
-def merge_scrum_time_entries(existing, incoming):
-    """Keep independent team time entries when clients save the shared board concurrently."""
-    if not isinstance(existing, dict) or not isinstance(incoming, dict):
-        return incoming
-    previous = {}
-    for person in existing.get('people', []):
-        for task in person.get('tasks', []):
-            if task.get('id'):
-                previous[str(task['id'])] = task.get('entries', [])
-    for person in incoming.get('people', []):
-        for task in person.get('tasks', []):
-            old_entries = previous.get(str(task.get('id')), [])
-            if not old_entries:
-                continue
-            ordered = {}
-            for entry in old_entries:
-                if entry.get('id'):
-                    ordered[str(entry['id'])] = dict(entry)
-            for entry in task.get('entries', []):
-                entry_id = str(entry.get('id') or '')
-                if not entry_id or entry_id not in ordered:
-                    if entry_id:
-                        ordered[entry_id] = dict(entry)
-                    continue
-                old = ordered[entry_id]
-                old_version = old.get('updatedAt') or old.get('start') or ''
-                new_version = entry.get('updatedAt') or entry.get('start') or ''
-                if new_version > old_version:
-                    merged = {**old, **entry}
-                elif old_version > new_version:
-                    merged = {**entry, **old}
-                else:
-                    merged = {**old, **entry}
-                    # Legacy rows have no edit version; a stale save must not reopen them.
-                    ends = [value for value in (old.get('end'), entry.get('end')) if value]
-                    if ends:
-                        merged['end'] = max(ends)
-                # Retain explicit deletions so stale browser saves cannot restore entries.
-                deletions = [value for value in (old.get('deletedAt'), entry.get('deletedAt')) if value]
-                if deletions:
-                    merged['deletedAt'] = max(deletions)
-                ordered[entry_id] = merged
-            task['entries'] = list(ordered.values())
-    return incoming
 
 
 class TimeEntryIn(BaseModel):
@@ -525,56 +454,56 @@ def create_resource_router(db, user, elevated, obj, data, audit):
     @router.get('/scrum')
     def get_scrum_board(s:Session=Depends(db), u=Depends(manager)):
         row = s.get(ResourceScrumBoard, 1)
-        if not row or not row.data:
-            return {'people':[], 'sprints':[], 'settings':{}, 'version':None}
-        return {**row.data, 'version':scrum_board_version(row)}
-
-    @router.get('/scrum/events')
-    async def scrum_board_events(u=Depends(manager)):
-        from .scrum_events import subscribe, unsubscribe
-        queue = subscribe()
-
-        async def stream():
-            try:
-                yield 'event: ready\ndata: {}\n\n'
-                while True:
-                    try:
-                        version = await asyncio.wait_for(queue.get(), timeout=15)
-                        yield f'event: update\ndata: {json.dumps({"version":version})}\n\n'
-                    except asyncio.TimeoutError:
-                        yield ': keep-alive\n\n'
-            finally:
-                unsubscribe(queue)
-
-        return StreamingResponse(stream(), media_type='text/event-stream', headers={
-            'Cache-Control':'no-cache', 'X-Accel-Buffering':'no', 'Connection':'keep-alive'
-        })
+        return row.data if row and row.data else {'people':[], 'sprints':[], 'settings':{}}
 
     @router.put('/scrum')
     def save_scrum_board(body:ScrumBoardIn, s:Session=Depends(db), u=Depends(manager)):
         payload = body.model_dump()
-        expected_version = payload.pop('version')
         if len(json.dumps(payload)) > 8_000_000:
             raise HTTPException(413, 'Scrum board is too large')
-        row = s.scalar(select(ResourceScrumBoard).where(ResourceScrumBoard.id==1).with_for_update())
+        row = s.get(ResourceScrumBoard, 1)
         if row is None:
-            if expected_version is not None:
-                raise HTTPException(409, 'The Scrum board changed. Refresh and merge before saving.')
             s.add(ResourceScrumBoard(id=1, data=payload))
         else:
-            if expected_version != scrum_board_version(row):
-                raise HTTPException(409, 'The Scrum board changed. Refresh and merge before saving.')
-            payload = merge_scrum_time_entries(row.data, payload)
             row.data = payload
-            previous = row.updated_at
-            if previous is None:
-                previous = datetime.min.replace(tzinfo=timezone.utc)
-            elif previous.tzinfo is None:
-                previous = previous.replace(tzinfo=timezone.utc)
-            row.updated_at = max(datetime.now(timezone.utc), previous + timedelta(microseconds=1))
         s.commit()
-        row = s.get(ResourceScrumBoard, 1)
-        return {'ok': True, 'version':scrum_board_version(row)}
+        return {'ok': True}
+
+    @router.get('/roadmap')
+    def get_roadmap(s:Session=Depends(db), u=Depends(manager)):
+        row = s.get(ResourceScrumBoard, 2)
+        return row.data if row and row.data else {'features':[]}
+
+    @router.put('/roadmap')
+    def save_roadmap(body:RoadmapIn, s:Session=Depends(db), u=Depends(manager)):
+        payload = body.model_dump()
+        if len(json.dumps(payload)) > 4_000_000:
+            raise HTTPException(413, 'Roadmap is too large')
+        row = s.get(ResourceScrumBoard, 2)
+        if row is None:
+            s.add(ResourceScrumBoard(id=2, data=payload))
+        else:
+            row.data = payload
+        s.commit()
+        return {'ok': True}
+
+    @router.get('/rca')
+    def get_rca(s:Session=Depends(db), u=Depends(manager)):
+        row = s.get(ResourceScrumBoard, 3)
+        return row.data if row and row.data else {'entries':[]}
+
+    @router.put('/rca')
+    def save_rca(body:RcaIn, s:Session=Depends(db), u=Depends(manager)):
+        payload = body.model_dump()
+        if len(json.dumps(payload)) > 4_000_000:
+            raise HTTPException(413, 'RCA list is too large')
+        row = s.get(ResourceScrumBoard, 3)
+        if row is None:
+            s.add(ResourceScrumBoard(id=3, data=payload))
+        else:
+            row.data = payload
+        s.commit()
+        return {'ok': True}
 
     @router.post('/email/summary')
     def send_summary_email(body:SummaryEmailIn, s:Session=Depends(db), u=Depends(manager)):
@@ -582,8 +511,6 @@ def create_resource_router(db, user, elevated, obj, data, audit):
             raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending email')
         message = EmailMessage()
         message['To'] = ', '.join(body.to)
-        if body.cc:
-            message['Cc'] = ', '.join(body.cc)
         message['Subject'] = body.subject
         message.set_content(body.text)
         if body.html:
@@ -603,46 +530,9 @@ def create_resource_router(db, user, elevated, obj, data, audit):
             logger.exception('Summary email delivery failed')
             detail = mail_error_detail(exc)
             raise HTTPException(502, detail[:500]) from None
-        audit(s,u.id,'send','resource_summary_email',1,after={'recipients':len(body.to)+len(body.cc),'to':len(body.to),'cc':len(body.cc),'subject':body.subject})
+        audit(s,u.id,'send','resource_summary_email',1,after={'recipients':len(body.to),'subject':body.subject})
         s.commit()
         return {'sent':True,'recipients':len(body.to)}
-
-    @router.post('/email/task')
-    def send_task_email(body:TaskEmailIn, s:Session=Depends(db), u=Depends(manager)):
-        if not resource_mail_configured():
-            raise HTTPException(503, 'Configure Gmail SMTP on the backend before sending email')
-        to_addresses = []
-        seen_to = set()
-        for address in body.to:
-            key = address.casefold()
-            if key not in seen_to:
-                seen_to.add(key)
-                to_addresses.append(address)
-        cc_addresses = []
-        seen_cc = set(seen_to)
-        for address in body.cc:
-            key = address.casefold()
-            if key not in seen_cc:
-                seen_cc.add(key)
-                cc_addresses.append(address)
-        message = EmailMessage()
-        message['To'] = ', '.join(to_addresses)
-        if cc_addresses:
-            message['Cc'] = ', '.join(cc_addresses)
-        message['Subject'] = body.subject
-        message.set_content(body.text)
-        try:
-            smtp_send(message)
-        except (OSError, smtplib.SMTPException, RuntimeError) as exc:
-            logger.exception('Task email delivery failed')
-            detail = mail_error_detail(exc)
-            raise HTTPException(502, detail[:500]) from None
-        audit(s,u.id,'send','resource_task_email',1,after={
-            'to_recipients':len(to_addresses), 'cc_recipients':len(cc_addresses),
-            'subject':body.subject,
-        })
-        s.commit()
-        return {'sent':True,'to':len(to_addresses),'cc':len(cc_addresses)}
 
     @router.get('/email-settings')
     def get_email_settings(s:Session=Depends(db), u=Depends(manager)):
@@ -703,6 +593,22 @@ def create_resource_router(db, user, elevated, obj, data, audit):
         item.actual_hours = (item.actual_hours or 0)+(body.end_at-body.start_at).total_seconds()/3600
         s.flush()
         audit(s,u.id,'create','resource_time_entry',entry.id,after=entry_data(entry))
+        s.commit()
+        return entry_data(entry)
+
+    @router.put('/items/{item_id}/timesheets/{entry_id}')
+    def edit_time(item_id:int, entry_id:int, body:TimeEntryIn, s:Session=Depends(db), u=Depends(manager)):
+        item = locked_item(s,item_id)
+        entry = obj(s,ResourceTimeEntry,entry_id)
+        if entry.item_id != item_id:
+            raise HTTPException(404, 'Timesheet not found')
+        if entry.end_at is None:
+            raise HTTPException(409, 'Stop the timer before editing it')
+        before = entry_data(entry)
+        old_hours = (utc(entry.end_at)-utc(entry.start_at)).total_seconds()/3600
+        entry.member, entry.start_at, entry.end_at, entry.note = body.member, body.start_at, body.end_at, body.note
+        item.actual_hours = max(0,(item.actual_hours or 0)-old_hours+(body.end_at-body.start_at).total_seconds()/3600)
+        audit(s,u.id,'update','resource_time_entry',entry.id,before=before,after=entry_data(entry))
         s.commit()
         return entry_data(entry)
 

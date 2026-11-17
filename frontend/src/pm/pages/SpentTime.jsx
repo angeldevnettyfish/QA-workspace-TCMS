@@ -8,7 +8,7 @@ import { formatHM } from '../lib/parseWorkbook'
 import { buildPivot, sortPivot, ROW_FIELDS, COL_FIELDS, MEASURES } from '../lib/pivot'
 import { buildPivotWorkbook } from '../lib/exportSpentTime'
 import { XLSX } from '../lib/xlsxStyle'
-import { activeTimeEntries, entryHours, sprintLabel, hours as toHours } from '../lib/scrum'
+import { entryHours, sprintLabel, hours as toHours } from '../lib/scrum'
 import { useScrum } from '../lib/scrumState'
 
 const emptyFilters = { members: new Set(), from: '', to: '', query: '' }
@@ -27,7 +27,6 @@ const monthStart = () => {
 function boardEntries(people, sprints) {
   const out = []
   const now = Date.now()
-  const memberNames = new Map(people.map((person) => [person.id, person.name.trim() || '(no member)']))
   for (const person of people) {
     for (const task of person.tasks) {
       const sprint = sprints.find((s) => s.id === task.sprintId)
@@ -40,15 +39,13 @@ function boardEntries(people, sprints) {
         status: task.status,
         tags: sprint ? sprintLabel(sprint, sprints.indexOf(sprint)) : 'Backlog'
       }
-      const timeEntries = activeTimeEntries(task)
-      if (timeEntries.length) {
-        for (const entry of timeEntries) {
+      if (task.entries.length) {
+        for (const entry of task.entries) {
           const start = entry.start ? new Date(entry.start) : null
           if (!start || Number.isNaN(start.getTime())) continue
           const hours = entryHours(entry, now)
           out.push({
             ...base,
-            member: memberNames.get(entry.memberId) || base.member,
             id: `${task.id}:${entry.id}`,
             note: entry.note || '',
             start,

@@ -1237,7 +1237,7 @@ button:disabled {
 .resource-open-tasks { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 40px; padding: 10px 16px; border: 1px solid transparent; border-radius: 8px; background: var(--accent-strong); color: #f4fffc; font-size: 13px; font-weight: 650; text-decoration: none; }
 .resource-open-tasks:hover { background: #078e70; }
 .resource-task-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
-.task-details { box-sizing: border-box; width: min(1180px,calc(100vw - 40px)); max-height: 92dvh; margin: auto; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 16px; overflow: auto; box-shadow: 0 24px 80px #0008; }
+.task-details { box-sizing: border-box; width: 75vw; max-width: none; height: 75vh; max-height: none; margin: auto; inset: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 16px; overflow: auto; box-shadow: 0 24px 80px #0008; }
 .task-details::backdrop { background: rgb(0 0 0 / 65%); backdrop-filter: blur(3px); }
 .task-details-header { position: sticky; top: 0; z-index: 3; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .task-details-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -1377,3 +1377,125 @@ button:disabled {
 
 .resource-workload td.over-estimate { color: #efb778; font-weight: 600; }
 .progress-cell small { margin-left: 4px; }
+
+/* ---- Overview: sprint bar and email bar share the same compact controls ---- */
+.resource-sprint-bar { flex-wrap: nowrap; align-items: flex-end; gap: 12px; padding: 10px 16px; }
+.resource-sprint-bar .resource-sprint-selection { flex-wrap: nowrap; align-items: flex-end; gap: 10px; }
+.resource-sprint-bar .resource-sprint-selection > label { min-width: 200px; margin: 0; font-size: 12px; }
+.resource-sprint-bar select { height: 36px; margin: 0; }
+.resource-sprint-bar .resource-open-tasks, .resource-sprint-bar button { height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; margin: 0; white-space: nowrap; }
+.resource-sprint-bar .resource-import { flex-wrap: nowrap; align-items: center; gap: 12px; margin-left: auto; }
+.resource-sprint-bar .resource-import .resource-actions { flex-wrap: nowrap; gap: 8px; }
+.resource-sprint-bar .resource-checkbox { height: 36px; white-space: nowrap; }
+.resource-compact .resource-new-sprint input[type="email"], .resource-compact .resource-new-sprint input[type="text"] { width: auto; flex: 1 1 280px; min-width: 240px; }
+.resource-compact .resource-new-sprint > label:first-child { flex: 1 1 320px; max-width: 460px; }
+@media (max-width: 900px) { .resource-sprint-bar, .resource-sprint-bar .resource-import { flex-wrap: wrap; } .resource-sprint-bar .resource-import { margin-left: 0; } }
+.resource-compact .resource-new-sprint > label:first-child { flex: 1 1 420px; max-width: 560px; min-width: 260px; }
+.resource-compact .resource-new-sprint > label:first-child input { width: 100%; }
+
+/* Add timesheet opens in its own popup over the task details */
+.task-add-dialog{width:min(560px,92vw);max-height:90vh;padding:20px;border:1px solid var(--border,#2f3441);border-radius:12px;background:#21242e;color:inherit;overflow:auto}
+.task-add-dialog::backdrop{background:rgba(0,0,0,.55)}
+.task-add-dialog header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.task-add-dialog header h3{margin:0}
+
+/* Task notes: double-click to edit */
+.task-notes-text{min-height:96px;white-space:pre-wrap;cursor:text;padding:8px;border:1px dashed transparent;border-radius:8px}
+.task-notes-text:hover{border-color:#3a4050}
+.task-description textarea{width:100%;min-height:180px}
+
+/* Timesheet toggle sits in the action row; no divider lines between task sections */
+.task-details .task-add-time, .task-details .task-description { margin-top: 16px; padding-top: 0; border-top: 0; }
+.task-details .task-add-time:empty, .task-details .task-timesheets:empty { display: none; }
+.task-details-actions .secondary span { color: var(--muted); margin: 0 4px; }
+.task-timesheets td:last-child { white-space: nowrap; }
+.task-timesheets td:last-child > button { margin-right: 6px; }
+.task-draft-row td { vertical-align: top; }
+.task-draft-row input, .task-draft-row select { width: 100%; min-width: 0; margin-top: 4px; }
+.task-fixed-date { display: block; font-size: 12px; color: var(--muted); }
+/* Draft timesheet row: keep member, note, dates, times and actions on a single line */
+.task-timesheets .task-draft-row td { vertical-align: middle; white-space: nowrap; }
+.task-draft-member { display: flex; gap: 8px; align-items: center; }
+.task-draft-member select { width: 160px; flex: 0 0 160px; margin: 0; }
+.task-draft-member input { flex: 1 1 200px; min-width: 120px; margin: 0; }
+.task-timesheets .task-draft-row td input[type="date"] { width: 150px; margin: 0 6px 0 0; display: inline-block; }
+.task-timesheets .task-draft-row td input[type="time"] { width: 130px; margin: 0; display: inline-block; }
+
+/* Editable task info fields */
+.task-details-sidebar dl div { align-items: center; }
+.task-details-sidebar dd { flex: 1 1 auto; }
+.task-details-sidebar dd input { width: 100%; min-width: 0; margin: 0; text-align: center; }
+.task-details-sidebar dt label { color: inherit; }
+.task-details-sidebar select { text-align: center; }
+
+/* Roadmap tab */
+.roadmap-head { display: flex; justify-content: flex-end; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+.roadmap-head h2 { margin: 0 0 6px; }
+.roadmap-stats { display: flex; gap: 10px; }
+.roadmap-stats div { min-width: 84px; padding: 10px 14px; text-align: right; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.roadmap-stats strong { display: block; font-size: 22px; }
+.roadmap-stats small { color: var(--muted); }
+.roadmap-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 16px 0; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.roadmap-controls label, .roadmap-chips { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 12px; color: var(--muted); }
+.roadmap-controls input, .roadmap-controls select { height: 36px; margin: 0; box-sizing: border-box; }
+.roadmap-controls input[type="number"] { width: 80px; }
+.roadmap-chips > div { display: flex; gap: 6px; flex-wrap: wrap; }
+.roadmap-chip { height: 32px; min-height: 32px; padding: 0 12px; border-radius: 999px; font-size: 12px; }
+.roadmap-chip.on { background: var(--accent-strong); color: #fff; }
+.roadmap-add { display: flex; gap: 8px; margin-left: auto; }
+.roadmap-add input { width: 220px; }
+.roadmap-add button { height: 36px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.roadmap-scroll { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: 12px; }
+.roadmap-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12px; margin: 0; }
+.roadmap-table th, .roadmap-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); text-align: center; white-space: nowrap; }
+.roadmap-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); font-size: 11px; letter-spacing: .06em; color: var(--muted); }
+.roadmap-table .roadmap-no { width: 48px; color: var(--muted); }
+.roadmap-table .roadmap-feature { min-width: 280px; text-align: left; }
+.roadmap-table .roadmap-feature input { width: 100%; margin: 0; background: transparent; border-color: transparent; }
+.roadmap-table .roadmap-feature input:hover, .roadmap-table .roadmap-feature input:focus { border-color: var(--border); }
+.roadmap-table select { width: 104px; height: 30px; margin: 0; padding: 0 6px; font-size: 12px; }
+.roadmap-table .roadmap-now { color: var(--text); }
+.roadmap-group td { text-align: left; background: rgb(120 140 160 / 8%); font-weight: 700; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.roadmap-s-planned { background: #3b3f87; color: #fff; }
+.roadmap-s-to-do { background: #2d4a6b; color: #fff; }
+.roadmap-s-in-progress { background: #e6d93a; color: #1b1b1b; }
+.roadmap-s-testing { background: #b57b2b; color: #fff; }
+.roadmap-s-blocked { background: #a33a3a; color: #fff; }
+.roadmap-s-done { background: #12c85b; color: #06240f; }
+
+/* RCA tab */
+.rca-add .rca-title { flex: 1 1 320px; }
+.rca-add input, .rca-add select { min-width: 180px; }
+.rca-add .rca-title input { width: 100%; }
+.rca-add button { height: 36px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.rca-summary { margin-left: auto; align-self: center; color: var(--muted); font-size: 12px; }
+.rca-table td input:not([type="checkbox"]) { width: 100%; min-width: 160px; margin: 0; background: transparent; border-color: transparent; }
+.rca-table td input:hover, .rca-table td input:focus { border-color: var(--border); }
+.rca-table select { width: 260px; }
+.rca-table td:nth-child(3) { text-align: left; }
+
+.rca-charts { display: grid; grid-template-columns: minmax(0,3fr) minmax(0,2fr); gap: 16px; margin: 0 0 16px; }
+.rca-charts figure { margin: 0; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.rca-charts figcaption { margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+.rca-svg { width: 100%; height: auto; color: var(--text); }
+.rca-pie-wrap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.rca-pie { width: 170px; height: 170px; flex: 0 0 auto; }
+.rca-legend { list-style: none; margin: 0; padding: 0; flex: 1 1 180px; font-size: 12px; }
+.rca-legend li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.rca-legend li span { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.rca-legend li strong { margin-left: auto; }
+@media (max-width: 900px) { .rca-charts { grid-template-columns: 1fr; } }
+
+.roadmap-scroll.rca-scroll { max-height: 380px; overflow-y: auto; }
+.rca-limit { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--muted); text-align: center; }
+
+.rca-table tbody tr:not(.rca-comment-row) { cursor: pointer; }
+.rca-table tr.rca-open > td { background: rgb(57 198 170 / 6%); }
+.rca-note-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.rca-comment-row td { padding: 10px 12px 14px; text-align: left; white-space: normal; background: rgb(57 198 170 / 6%); }
+.rca-comment-row label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.rca-comment-row textarea { width: 100%; min-height: 90px; margin: 0; resize: vertical; }
+
+.rca-table .rca-actions-col { min-width: 280px; text-align: left; }
+
+.rca-comment-row textarea, .task-description textarea { overflow: hidden; resize: none; min-height: 90px; }

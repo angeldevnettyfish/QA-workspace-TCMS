@@ -29,24 +29,19 @@ async function getFromServer() {
   const res = await withTimeout((signal) => fetch(URL, { signal, credentials: 'include' }))
   if (!res.ok) throw new Error(`Server answered ${res.status}`)
   const body = await res.json()
-  return { ...asBoard(body), view: normalizeScrumView(body.settings?.scrum), version: body.version ?? null }
+  return { ...asBoard(body), view: normalizeScrumView(body.settings?.scrum) }
 }
 
-export async function refreshScrumBoard() {
-  return getFromServer()
-}
-
-async function putToServer(people, sprints, view, version) {
+async function putToServer(people, sprints, view) {
   const res = await withTimeout((signal) =>
     fetch(URL, {
       method: 'PUT',
       signal,
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ people, sprints, settings: { scrum: normalizeScrumView(view) }, version })
+      body: JSON.stringify({ people, sprints, settings: { scrum: normalizeScrumView(view) } })
     })
   )
-  if (res.status === 409) return { conflict: await getFromServer() }
   if (!res.ok) throw new Error(`Server answered ${res.status}`)
   return res.json()
 }
@@ -64,9 +59,8 @@ export async function initScrum() {
   try {
     const remote = await getFromServer()
     if (!remote.people.length && !remote.sprints.length && (local.people.length || local.sprints.length)) {
-      const saved = await putToServer(local.people, local.sprints, local.view, remote.version)
-      if (saved.conflict) return { ...saved.conflict, online: true, migrated: 0 }
-      return { ...local, version: saved.version, online: true, migrated: local.people.length }
+      await putToServer(local.people, local.sprints, local.view)
+      return { ...local, online: true, migrated: local.people.length }
     }
     writeLocal(remote.people, remote.sprints, remote.view)
     return { ...remote, online: true, migrated: 0 }
@@ -75,12 +69,11 @@ export async function initScrum() {
   }
 }
 
-export async function persistScrum(people, sprints, view, version) {
+export async function persistScrum(people, sprints, view) {
   writeLocal(people, sprints, view)
   try {
-    const saved = await putToServer(people, sprints, view, version)
-    if (saved.conflict) return { online: true, conflict: saved.conflict }
-    return { online: true, version: saved.version }
+    await putToServer(people, sprints, view)
+    return { online: true }
   } catch (err) {
     return { online: false, error: err.message || String(err) }
   }

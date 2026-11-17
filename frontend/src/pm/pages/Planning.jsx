@@ -9,7 +9,6 @@ import {
   byStatus,
   daysLeft,
   defaultSprintId,
-  entryHours,
   hours,
   isCurrentSprint,
   editScope,
@@ -30,7 +29,6 @@ import {
 } from '../lib/scrum'
 import { useScrum } from '../lib/scrumState'
 import AddTasks from '../components/AddTasks'
-import PeoplePicker, { peopleChoices, PeopleOptions } from '../components/PeoplePicker'
 import TaskDialog from '../components/TaskDialog'
 import PlanningSummaryDialog from '../components/PlanningSummaryDialog'
 
@@ -64,15 +62,10 @@ const h = (value) => (value ? String(Math.round(value * 100) / 100) : '')
  * foot. It is the same board as the Scrum tab — the state is shared — so an
  * estimate typed here shows up there and is saved the same way.
  */
-export default function Planning() {
+export default function Planning({ trackerView, sharedSprint = '', onSharedSprint }) {
   const { people, setPeople, sprints, view, setView, features, addTasks, store } = useScrum()
-  const personChoices = useMemo(() => peopleChoices(people), [people])
-  const requestedSprintId = useMemo(() => new URLSearchParams(window.location.search).get('sprint'), [])
   const [adding, setAdding] = useState(false)
   const [openTaskId, setOpenTaskId] = useState(null)
-  const [editingSpentTaskId, setEditingSpentTaskId] = useState('')
-  const [spentDraft, setSpentDraft] = useState('')
-  const [spentEditError, setSpentEditError] = useState('')
   const [mailing, setMailing] = useState(false)
   // Sorting is a way of reading the table, not a setting: it starts off, and a
   // third click on a column puts the board's own order back.
@@ -90,13 +83,20 @@ export default function Planning() {
   // null means "not chosen yet" and resolves to the sprint running today;
   // ALL_SPRINTS is the explicit "every sprint", which is no filter at all.
   const sprintId = planSprintScope(sprints, view.planSprintId)
+  const nameOf = (id) => (id === ALL_SPRINTS || id === null ? 'All sprints' : id === BACKLOG ? 'Backlog' : sprints.map((s, i) => [s.id, sprintLabel(s, i)]).find(([sid]) => sid === id)?.[1] || '')
+  // Follow the sprint chosen on the Overview or RCA tab, and report this tab's own choice.
   useEffect(() => {
-    if (!requestedSprintId || !sprints.some((sprint) => sprint.id === requestedSprintId)) return
-    setView((current) => current.planSprintId === requestedSprintId
-      ? current
-      : { ...current, planSprintId: requestedSprintId })
-  }, [requestedSprintId, sprints, setView])
+    if (!sharedSprint) return
+    const wanted = sharedSprint.toLowerCase()
+    const match = wanted === 'backlog' ? { id: BACKLOG } : wanted === 'all sprints' ? { id: ALL_SPRINTS } : sprints.find((s, i) => sprintLabel(s, i).toLowerCase() === wanted)
+    if (match && match.id !== sprintId) setView((v) => ({ ...v, planSprintId: match.id }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedSprint, sprints])
   const sprint = sprints.find((s) => s.id === sprintId) || null
+  // A sprint that came from the Overview tracker is shown as the tracker shows it.
+  const trackerSprint = Boolean(
+    trackerView && sprint && people.some((p) => p.tasks.some((t) => t.sprintId === sprint.id && t.trackerId))
+  )
   const sprintIndex = sprints.findIndex((s) => s.id === sprintId)
 
   const rows = useMemo(
@@ -146,53 +146,6 @@ export default function Planning() {
           : p
       )
     )
-
-  const editSpent = (task) => {
-    setEditingSpentTaskId(task.id)
-    setSpentDraft(String(spentHours(task)))
-    setSpentEditError('')
-  }
-
-  const cancelSpentEdit = () => {
-    setEditingSpentTaskId('')
-    setSpentDraft('')
-    setSpentEditError('')
-  }
-
-  const saveSpentEdit = (person, task) => {
-    const target = spentDraft.trim() ? Number(spentDraft.replace(',', '.')) : 0
-    if (!Number.isFinite(target) || target < 0) {
-      setSpentEditError('Enter a valid number of hours.')
-      return
-    }
-
-    const now = Date.now()
-    const entries = (task.entries || []).filter((entry) => !entry.deletedAt && Number.isFinite(Date.parse(entry.start)))
-    const latest = [...entries].sort((a, b) => Date.parse(a.start) - Date.parse(b.start)).at(-1)
-    if (!latest || !Number.isFinite(Date.parse(latest.start))) {
-      setSpentEditError('This time entry has no valid start time.')
-      return
-    }
-
-    const otherHours = entries
-      .filter((entry) => entry.id !== latest.id)
-      .reduce((total, entry) => total + entryHours(entry, now), 0)
-    const latestHours = Math.round((target - otherHours) * 100) / 100
-    if (latestHours < 0) {
-      setSpentEditError(`The total cannot be less than the other entries (${otherHours.toFixed(2)} h).`)
-      return
-    }
-
-    const updatedAt = new Date(now).toISOString()
-    const durationMs = latestHours * 3600000
-    const change = latest.end
-      ? { end: new Date(Date.parse(latest.start) + durationMs).toISOString(), updatedAt }
-      : { start: new Date(now - durationMs).toISOString(), updatedAt }
-    updateTask(person.id, task.id, {
-      entries: task.entries.map((entry) => entry.id === latest.id ? { ...entry, ...change } : entry)
-    })
-    cancelSpentEdit()
-  }
 
   /** Reassigning here is the same move the board makes by drag and drop. */
   const reassign = (taskId, toPersonId) => setPeople((list) => moveTask(list, taskId, toPersonId))
@@ -304,14 +257,15 @@ export default function Planning() {
         <p className="warn">The QA backend is not reachable — changes are kept in this browser and will sync once it is running again.</p>
       )}
 
-      <PeopleOptions choices={personChoices} listId="planning-person-options" />
-
-      <section className="controls">
+      <section className="controls plan-controls">
         <label>
           🏃 Sprint
           <select
             value={sprintId === null ? ALL_SPRINTS : sprintId}
-            onChange={(e) => setView((v) => ({ ...v, planSprintId: e.target.value }))}
+            onChange={(e) => {
+              setView((v) => ({ ...v, planSprintId: e.target.value }))
+              onSharedSprint?.(nameOf(e.target.value))
+            }}
           >
             {sprints.map((s, i) => (
               <option key={s.id} value={s.id}>
@@ -376,7 +330,12 @@ export default function Planning() {
           </button>
         )}
         <div className="spacer" />
-        <button type="button" onClick={() => setAdding(true)} disabled={!people.length}>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          disabled={!people.length || trackerSprint}
+          title={trackerSprint ? 'Use Add task in the tracker table below for this sprint' : undefined}
+        >
           + Add task
         </button>
         <button
@@ -403,7 +362,9 @@ export default function Planning() {
         </span>
       </section>
 
-      {!rows.length ? (
+      {trackerSprint ? (
+        trackerView(sprint.name)
+      ) : !rows.length ? (
         <p className="empty">
           {sprints.length
             ? 'Nothing in this sprint yet — add tasks on the Scrum tab, or pick another sprint.'
@@ -486,7 +447,6 @@ export default function Planning() {
                   { key: 'sprint', label: '🏃 Sprint', left: true },
                   { key: 'estimate', label: 'Est. h' },
                   { key: 'spent', label: 'Spent h' },
-                  { key: 'unplanned', label: 'Unplanned h' },
                   { key: 'result', label: 'Result', left: true },
                   { key: 'issues', label: 'Issues' },
                   { key: '', label: '' }
@@ -527,7 +487,6 @@ export default function Planning() {
             </thead>
             <tbody>
               {sorted.map(({ person, task }) => {
-                const trackedEntries = (task.entries || []).filter((entry) => !entry.deletedAt)
                 return (
                   <tr key={task.id} className={picked.has(task.id) ? 'picked' : undefined}>
                     <td className="pick-col">
@@ -540,15 +499,18 @@ export default function Planning() {
                       />
                     </td>
                     <th className="left sticky-col">
-                      <PeoplePicker
+                      <select
                         className="task-select person-select"
-                        personId={person.id}
-                        choices={personChoices}
-                        listId="planning-person-options"
+                        value={person.id}
                         title="Hand this task to someone else"
-                        ariaLabel={`Assign ${task.title || 'task'} to a person`}
-                        onChange={(personId) => assignRow(task, personId)}
-                      />
+                        onChange={(e) => assignRow(task, e.target.value)}
+                      >
+                        {people.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name.trim() || 'unnamed'}
+                          </option>
+                        ))}
+                      </select>
                     </th>
                     <td className="left">
                       <button
@@ -598,40 +560,14 @@ export default function Planning() {
                       />
                     </td>
                     <td>
-                      {trackedEntries.length ? (
-                        editingSpentTaskId === task.id ? (
-                          <div className="tracked-edit">
-                            <input
-                              autoFocus
-                              className="cell-input hours"
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={spentDraft}
-                              title="This adjusts the latest time entry; earlier entries stay unchanged."
-                              aria-label={`Edit spent hours for ${task.title || 'task'}`}
-                              onChange={(e) => setSpentDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveSpentEdit(person, task)
-                                if (e.key === 'Escape') cancelSpentEdit()
-                              }}
-                            />
-                            <button type="button" className="small primary" title="Save spent hours" onClick={() => saveSpentEdit(person, task)}>✓</button>
-                            <button type="button" className="small" title="Cancel edit" onClick={cancelSpentEdit}>✕</button>
-                            {spentEditError && <span className="tracked-edit-error" role="alert">{spentEditError}</span>}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="tracked tracked-button"
-                            title="Click to edit spent hours; this adjusts the latest time entry"
-                            aria-label={`Edit spent time for ${task.title || 'task'}`}
-                            onClick={() => editSpent(task)}
-                          >
-                            {spentHours(task)}
-                            <small>✎</small>
-                          </button>
-                        )
+                      {task.entries.length ? (
+                        <span
+                          className="tracked"
+                          title={`${task.entries.length} time entr${task.entries.length === 1 ? 'y' : 'ies'} on the board — start and stop the clock there`}
+                        >
+                          {spentHours(task)}
+                          <small>⏱</small>
+                        </span>
                       ) : (
                         <input
                           className="cell-input hours"
@@ -643,18 +579,6 @@ export default function Planning() {
                           onChange={(e) => updateTask(person.id, task.id, { spent: hours(e.target.value) })}
                         />
                       )}
-                    </td>
-                    <td>
-                      <input
-                        className="cell-input hours"
-                        type="number"
-                        min="0"
-                        step="0.25"
-                        value={task.unplannedHours || ''}
-                        placeholder="0"
-                        title="Hours spent outside the sprint plan"
-                        onChange={(e) => updateTask(person.id, task.id, { unplannedHours: hours(e.target.value) })}
-                      />
                     </td>
                     <td className="left">
                       <span className={`pill result-${task.testResult.toLowerCase().replace(/\s+/g, '-')}`}>{task.testResult}</span>
@@ -702,10 +626,8 @@ export default function Planning() {
                   {totals.open} open · {totals.done} done
                 </td>
                 <td />
-                <td />
                 <td>{h(totals.estimate) || '—'}</td>
                 <td>{h(totals.spent) || '—'}</td>
-                <td>{h(totals.unplanned) || '—'}</td>
                 <td />
                 <td>{totals.issues || ''}</td>
                 <td />
@@ -731,7 +653,7 @@ export default function Planning() {
         />
       )}
 
-      {rows.length > 0 && (
+      {rows.length > 0 && !trackerSprint && (
         <section className="plan-pivot">
           <h2>
             Planned hours by {view.planGroupBy === 'status' ? 'status' : 'person'}
