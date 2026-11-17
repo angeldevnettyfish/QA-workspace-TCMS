@@ -3412,7 +3412,7 @@
 .pm-root .plan-controls > label, .pm-root .plan-controls .status-filter { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 12px; font-weight: 500; line-height: 16px; color: var(--muted); }
 .pm-root .plan-controls .filter-caption { line-height: 16px; font-weight: 500; font-size: 12px; margin: 0; }
 .pm-root .plan-controls select { height: 36px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; margin: 0; }
-.pm-root .plan-controls .chips { display: flex; align-items: center; gap: 6px; height: 36px; }
+.pm-root .plan-controls .chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; height: 36px; }
 .pm-root .plan-controls .chip { height: 32px; margin: 0; }
 .pm-root .plan-controls > label.check { flex-direction: row; align-items: center; height: 36px; gap: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; }
 .pm-root .plan-controls > label.check input { margin: 0; width: auto; }
